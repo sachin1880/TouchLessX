@@ -2,94 +2,252 @@
 
 A Python desktop app that turns your webcam into a touchless controller: it tracks
 your hand, recognizes a small set of deliberate gestures, and maps them to mouse
-movement, clicks, media control, and presentation navigation. Everything runs
-locally — no cloud account, no video stored or uploaded by default.
+movement, clicks, scrolling, media control, and presentation navigation. Everything
+runs locally — no cloud account, no video stored or uploaded.
 
-## Gesture map
+## Gesture map (Default profile)
 
 | Gesture | Action | Category |
 |---|---|---|
-| ✋ Open Palm | Move the cursor | Mouse Control |
-| 🤏 Pinch (thumb + index) | Left click | Mouse Control |
+| ✋ Open Palm | Move the cursor (steered by the palm) | Mouse Control |
+| 🤏 Pinch (thumb + index) | Left click; twice quickly = double-click; hold to drag (optional) | Mouse Control |
 | ✌️ Two Fingers (index + middle) | Right click | Mouse Control |
+| 🤟 Three Fingers, move up/down | Scroll | Mouse Control |
 | ☝️ Point, move up/down | Volume up/down | Volume Control |
 | ✊ Fist | Play / Pause media | Media Control |
-| 👈 Swipe Left | Previous slide | Presentation |
-| 👉 Swipe Right | Next slide | Presentation |
+| 👈 👉 Fast flick left / right | Previous / next slide | Presentation |
+| 👍 Thumbs Up | Confirm a pending smart-home command | — |
+| 👆 👇 Fast flick up / down | Not mapped by default | — |
+| 🖐 Opening the hand out of a fist | Not mapped by default (Restore Window in Browse) | — |
 
-Each category can be toggled on/off live from the **Quick Controls** panel in the UI.
-Press **Space** (or the Pause button) at any time to immediately stop all gesture-
-triggered actions — the camera keeps running and showing detection, nothing is sent
-to the mouse/keyboard while paused.
+The **Air Mouse** profile makes one hand a complete mouse: the open hand (or a
+pointing finger) moves the cursor, pinch is the left button (once = click, twice =
+double-click, held = drag and drop), two fingers right-click, three fingers scroll in
+both directions, and a fist is a rest pose that does nothing.
+
+The **Browse** profile turns the open hand into a two-way scroller (move it up/down or
+left/right), makes a fist minimise the front window and opening the hand restore it,
+and moves the cursor with a pointing finger instead.
+
+Every mapping can be changed, or disabled, in **Gesture Studio**, and each **profile**
+(Default, Work, Presentation, Air Mouse, Browse, GestureAI, Media, or your own) keeps its own set.
+
+What keeps it from misfiring:
+
+- A hand shape only counts once it has been seen for consecutive frames, so the shapes
+  a hand passes through while opening or closing do nothing.
+- One-shot poses (fist, two fingers, thumbs-up) must be held briefly; scroll and volume
+  start after a short hold. Pinch, the click, acts at once.
+- A pinch releases only when the fingers open clearly (hysteresis), so it cannot flicker.
+- The cursor follows the palm through a speed-adaptive filter: steady when the hand
+  rests, immediate when it moves.
+- Only fast flicks count as swipes; ordinary cursor movement does not.
+- Scrolling "glides": the hand's distance from a neutral point sets the speed, so there
+  is no return stroke to scroll the page back, and it stays on one axis until the hand
+  returns to the middle. Output is in pixels, not whole lines, so it moves smoothly.
+- Detections under the confidence threshold are ignored.
+- A **resting hand is ignored**: when the wrist is at the bottom edge of the picture or
+  below it (a hand on the desk or keyboard, half out of view) nothing is recognised.
+  Raise the hand so the wrist is visible to use gestures. This and the two rules below
+  came from replaying recorded real use, where a resting hand read as a fist had
+  minimised a window 27 times in three minutes.
+- A thumb-and-index touch is only a pinch when the hand is otherwise open or the index
+  finger reaches forward; in a closed fist the thumb rests on the index finger too, and
+  that used to click.
+- One fist minimises one window: a second minimise within two seconds is ignored.
+
+The **GestureAI** profile is a lock-based layout: the open palm is a neutral "safe"
+pose, a pointing finger steers the cursor, pinch clicks and drags, two fingers scroll,
+a sideways-pointing finger changes slides, a **fist locks** all gesture control and a
+**thumbs-up unlocks** it. While locked, hand movement does nothing.
+
+**Stopping control:** the red **EMERGENCY STOP** button on the dashboard, **Space** or
+**Esc** (while TouchlessX is in front), the **Pause** button, or Pause on the
+**floating mini controller** that stays above other apps. None of these depend on a
+gesture being recognised. You can also choose one **emergency stop gesture** in
+Settings that works in every profile, even while locked. **Stop Camera** turns tracking off entirely. **Practice mode** (Gesture Studio)
+recognises gestures without sending anything.
+
+Full instructions: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## Setup
 
-Requires Python 3.9–3.11 (MediaPipe's Python wheels lag behind the newest Python
-releases, so a very new interpreter may fail to install it).
+Requires Python 3.10–3.12 with Tk (MediaPipe publishes no wheels for the newest
+Python releases, and Homebrew's `python3` ships without Tk).
 
 ```bash
 cd TouchlessX
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python app.py
 ```
 
-On first run your OS will prompt for **camera access**, and — since this app moves
-the mouse and presses keys — for **input/accessibility control**:
+With [uv](https://docs.astral.sh/uv/), which also fetches a suitable Python for you:
 
-- **macOS**: System Settings → Privacy & Security → Accessibility → enable your
-  terminal app (or the packaged app, once built).
+```bash
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r requirements.txt
+.venv/bin/python app.py
+```
+
+The first start downloads MediaPipe's hand-landmark model (~8 MB) into
+`assets/models/`. That is the only download; camera frames never leave the machine.
+
+`python app.py --check` runs a headless self-test: it loads the model, opens the camera,
+tracks for a few seconds and prints the measured frame rate. It sends no input.
+
+### Permissions
+
+- **Camera** — the OS asks on first start. On macOS the permission belongs to the app
+  you launch from (Terminal, VS Code, …). TouchlessX retries automatically once you
+  answer the prompt.
+- **Input control (macOS)** — System Settings → Privacy & Security → Accessibility →
+  enable the app you launch from, then restart TouchlessX. Until then the dashboard
+  shows *System Controls: No permission* and gestures are detected but control nothing.
+  The **System Controls** page shows the status and can open the request prompt.
 - **Windows**: no extra permission needed, but antivirus/UAC may prompt once.
 - **Linux**: `pyautogui` needs an X11 session (not plain Wayland) for mouse control.
 
-If input control can't be granted or fails to initialize, TouchlessX still runs in
-**preview-only mode** — detection and the UI work, it just won't move anything.
+## The app
+
+| Page | What it does |
+|---|---|
+| **Dashboard** | Live preview with landmarks, current gesture / confidence / last action, on-off switches per category, recent actions, session analytics, gesture guide, system status. |
+| **Gesture Studio** | Practice area (nothing is sent), gesture → action mapping with an on/off switch per gesture, per-gesture confidence and cooldown, recognition sensitivity, reset. |
+| **Training Studio** | Record examples of your own poses, train a scikit-learn classifier, see accuracy / precision / recall and the confusion matrix, keep and revert model versions. Gesture control is off while this page is open. |
+| **System Controls** | Cursor speed, smoothing, dead zone, double-click window, scroll speed, drag, user-defined keyboard shortcuts, applications to open, pointer calibration, input-permission status. |
+| **Media & Presentation** | Media / volume / slide switches, arrow vs. Page Up/Down slide keys, test buttons, compatibility notes. |
+| **Smart Home** | Optional. Webhooks from a hub (Home Assistant, Node-RED, IFTTT, …) mapped to gestures, with thumbs-up confirmation. Off by default. |
+| **AI Insights** | Usage from the local history, recognition quality, rule-based suggestions, clear-history, model training history. |
+| **Clipboard** | Which gesture does copy / cut / paste / delete / select all / undo / redo, and an in-memory history of the last ten copied texts that can be put back or pasted by gesture. |
+| **Profiles** | Create, rename, duplicate, switch, import and export profiles. |
+| **Settings** | Dark / light theme, accent colour (eight presets or any colour you pick), mini controller, camera and resolution, mirror preview, controlling hand (left / right / either), emergency stop gesture, privacy and data retention, setup guide, versions. |
+
+Settings are saved to `config/settings.json`. Profiles (`config/profiles.json`),
+smart-home devices (`config/smart_home.json`, may hold tokens), the training dataset
+(`data/gesture_samples.csv`), trained models (`data/models/`) and the action history
+(`data/history.db`) are git-ignored.
+
+Keyboard shortcuts are built from an approved key list (modifiers plus one key), and
+"open application" actions accept only an application bundle or executable you picked,
+started without arguments. A gesture can never run a command or script. Imported
+profiles are validated, and cannot bring shortcuts, applications or smart-home targets
+with them.
+
+### Custom gestures
+
+MediaPipe finds the hand; the Training Studio only teaches a small classifier to name
+a *pose* from the 21 landmarks. Samples are stored as normalised landmark features in
+`data/gesture_samples.csv` (a header, then `label, f0 … f41` per sample) - never images
+or video. Training uses k-nearest-neighbours from scikit-learn, holds back 25% of the
+samples for evaluation, and warns about thin or unbalanced data. Because a classifier
+always answers with one of its labels, a pose only counts if it is also geometrically
+close to that gesture's samples; anything else is ignored. Custom gestures are
+consulted only for poses the built-in rules do not already recognise. The reported
+figures describe your dataset, not every lighting, camera or user.
+
+### Privacy
+
+- Frames are processed in memory and discarded; nothing is recorded or uploaded.
+- No telemetry, no account.
+- The action history (`data/history.db`) and diagnostic log (`logs/actions.log`) hold
+  only time, gesture, action and confidence. Both can be switched off and cleared in
+  **Settings**; history is pruned after the retention period you choose.
+- Custom gestures store landmark coordinates, never images.
+- The diagnostic log also keeps `logs/frames.csv`: the hand's 21 landmark points and
+  how each recent frame was classified (a few minutes, size-capped). It is what makes
+  it possible to tune recognition on real use instead of guesses. Same switch, same
+  Clear button; coordinates only.
+- Clipboard history is held in memory only and is never written to disk. It contains
+  whatever text you copy, passwords included, so it has its own off switch.
+- Network use is limited to the one-time model download and the smart-home webhooks
+  you configure yourself.
 
 ## Project structure
 
 ```
 TouchlessX/
-├── app.py                   # Entry point
-├── requirements.txt
+├── app.py                   # Entry point (+ --check self-test)
+├── pyproject.toml / requirements.txt
 ├── config/
-│   └── settings.json        # Sensitivity thresholds + per-category on/off, edited live by the UI
+│   └── settings.json        # Your settings, created on first run (git-ignored, like all personal data)
+├── docs/
+│   ├── USER_GUIDE.md
+│   └── QA_CHECKLIST.md       # Manual tests the automated suite cannot cover
 ├── src/
+│   ├── config.py             # Defaults + tolerant load/save of settings.json
 │   ├── camera.py             # Camera Layer - reads webcam frames
-│   ├── hand_tracker.py       # Hand Tracking Layer - MediaPipe landmarks
-│   ├── gesture_engine.py     # Gesture Engine - classification, cooldowns, swipe detection
-│   ├── action_controller.py  # Action Dispatcher - gesture -> mouse/keyboard, category-gated
-│   ├── safety.py             # Global pause + confidence gating
-│   └── ui.py                 # Desktop UI (CustomTkinter)
-└── tests/
-    ├── test_gestures.py       # Gesture classification + cooldown/trigger behavior
-    └── test_mapping.py        # Action mapping + gating, via a fake input executor
+│   ├── hand_tracker.py       # Hand Tracking Layer - MediaPipe Hand Landmarker
+│   ├── gesture_engine.py     # Classification, debouncing, hold-to-fire, swipes
+│   ├── custom_gestures.py    # Landmark features + the distance check for trained poses
+│   ├── training.py           # Dataset (CSV), scikit-learn training, evaluation, model versions
+│   ├── action_controller.py  # Gesture -> action dispatch, cursor filter, shortcuts, OS input
+│   ├── safety.py             # Pause / emergency stop, lock, confidence gating
+│   ├── profiles.py           # Profile store, presets, import validation
+│   ├── history.py            # SQLite action history
+│   ├── smart_home.py         # Optional webhooks
+│   ├── action_log.py         # Text log + session statistics / suggestions
+│   ├── ui.py                 # App shell, dashboard, mini controller, pipeline thread
+│   ├── ui_pages.py           # The other pages
+│   └── ui_widgets.py         # Light/dark palette and widget helpers
+└── tests/                    # 117 tests; no camera, display, network or real input needed
 ```
 
 ## Running the tests
 
-Gesture classification and action-mapping logic are pure/stateful-but-deterministic
-and run with no camera, display, or real mouse/keyboard needed:
+The gesture, mapping, profile, shortcut, history, custom-gesture and webhook logic runs
+with no camera, display, network or real mouse/keyboard:
 
 ```bash
 pip install pytest
 pytest tests/ -v
 ```
 
-## Known limitations (first release)
+## Compatibility
 
-- Gesture recognition is geometry-based (landmark distances/ratios), not a trained
-  classifier — it's tuned for a hand facing the camera in reasonable lighting, not
-  every angle, lighting, or background.
+| | Tested |
+|---|---|
+| OS | macOS on Apple Silicon |
+| Python | 3.12 |
+| Libraries | MediaPipe 0.10.21, OpenCV 4.11, CustomTkinter 5.2.2, PyAutoGUI 0.9.54, NumPy 1.26, scikit-learn 1.9, Tk 9.0 |
+
+Windows and Linux use the same code paths apart from media keys and are expected to
+work, but have not been tested.
+
+MediaPipe is pinned to 0.10.21 or older on purpose. Newer builds (seen with 0.10.35)
+bundle a usage-statistics uploader that periodically tries to contact Google, which
+would contradict the "nothing leaves this computer" promise above. The pinned build
+does not contain it.
+
+## Known limitations
+
+- Built-in gestures are geometry-based and tuned for a hand facing the camera in
+  reasonable lighting. No accuracy or latency figure is published: none has been
+  measured across users, lighting and hardware (see docs/QA_CHECKLIST.md).
 - Single hand, single user at a time.
-- Presentation shortcuts (Left/Right arrow) work in most slideshow and media apps,
-  but aren't guaranteed for every application.
-- Smart Home and AI Assistant panels are shown in the UI as placeholders for a
-  future extension — they're not wired to anything yet.
+- There is no system tray icon, launch-at-login, or system-wide pause hotkey. The
+  floating mini controller covers pausing from other apps.
+- Custom gestures are only consulted for poses the built-in rules don't recognise, and
+  are matched in 2D.
+- "Either hand" follows whichever hand the tracker reports first; choose a controlling
+  hand in Settings if a second hand in view causes jumps.
+- Opening applications works on macOS and Windows only. Windows support as a whole is
+  written but untested.
+- Smart Home sends a plain HTTP POST per trigger; it has no device discovery or state.
+- Not packaged: it runs from source. There is no installer, code signing, update check
+  or licensing.
+- Not for vehicle, medical, industrial or other safety-critical control.
 
-## Future enhancements
+## Not implemented from the product scope
 
-- Custom gesture training (per the original project scope's optional ML phase).
-- Two-hand gestures and temporal gesture sequences.
-- Smart-home device integration through a compatible hub/API.
-- Packaged, double-clickable builds (PyInstaller) per OS.
+- Packaging and distribution: installer, signing, update checks, licence activation,
+  editions.
+- Cloud services: accounts, sync, remote AI.
+- System tray, launch at login, global hotkey.
+- Two-hand gestures, voice commands, application-aware profile switching.
+- From the GestureAI specification: the PySide6 interface and its folder layout (this
+  app stays on CustomTkinter with the modules above), Matplotlib charts, cursor
+  acceleration, optional video recording, and running user-defined commands (left out
+  on purpose - gestures may press keys and open chosen applications, nothing more).
+- Separate Windows and Linux adapters with their own testing.

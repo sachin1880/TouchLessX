@@ -1,0 +1,22 @@
+[project]
+name = "touchlessx"
+version = "1.2.0"
+description = "Webcam hand-gesture control for the desktop, processed locally."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "opencv-python>=4.9,<5",
+    "mediapipe>=0.10.14,<=0.10.21",
+    "numpy>=1.26,<2",
+    "pyautogui>=0.9.54,<1",
+    "customtkinter>=5.2,<6",
+    "pillow>=10.0,<11",
+    "scikit-learn>=1.4,<2",
+    "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

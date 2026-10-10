@@ -6,3 +6,10 @@ env/
 .DS_Store
 .pytest_cache/
 *.egg-info/
+logs/
+assets/models/
+config/smart_home.json
+config/custom_gestures.json
+data/
+config/profiles.json
+config/settings.json

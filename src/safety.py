@@ -11,6 +11,16 @@ class SafetyGuard:
     def __init__(self, confidence_threshold: float = 0.6) -> None:
         self.confidence_threshold = confidence_threshold
         self._paused = False
+        self._locked = False
+
+    @property
+    def locked(self) -> bool:
+        """Locked by gesture: every gesture is ignored except the unlock gesture.
+        Unlike pause, this is meant to be entered and left hands-free."""
+        return self._locked
+
+    def set_locked(self, value: bool) -> None:
+        self._locked = value
 
     @property
     def paused(self) -> bool:

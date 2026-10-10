@@ -1,10 +1,13 @@
 """User Interface: shows video, landmarks, recognized gesture, settings, and
 enable/disable status. The camera/tracking/gesture pipeline runs on a background
-thread; Tkinter widgets are only ever touched from the main thread, via a queue.
+thread; Tkinter widgets are only ever touched from the main thread - the worker hands
+over its newest frame through a one-slot buffer and everything else through a queue.
 """
 from __future__ import annotations
 
-import json
+import copy
+import math
+import platform
 import queue
 import threading
 import time
@@ -16,47 +19,65 @@ import customtkinter as ctk
 import cv2
 from PIL import Image
 
-from .action_controller import ActionController, NullExecutor, PyAutoGuiExecutor
+from .action_controller import ActionController, NullExecutor, PyAutoGuiExecutor, continuous_poses
+from .action_log import ActionLog, FrameLog, SessionStats, build_suggestions
 from .camera import Camera, CameraError
-from .gesture_engine import GestureEngine
-from .hand_tracker import HandTracker
+from .clipboard import ClipboardHistory
+from .config import DEFAULT_CONFIG, save_config
+from .custom_gestures import CustomGestureError, CustomGestureStore
+from .gesture_engine import BUILTIN_GESTURES, CUSTOM_PREFIX, OPTIONAL_GESTURES, GestureEngine, pinch_distance
+from .hand_tracker import HandTracker, TrackerError
+from .history import History
+from .profiles import PROFILE_KEYS, ProfileError, ProfileStore, clean_name
 from .safety import SafetyGuard
+from .smart_home import SmartHomeClient
+from .training import GestureDataset, ModelManager, TrainingError, train
+from .ui_pages import PAGES, action_label
+from .ui_widgets import (
+    ACCENT, ACCENT_HOVER, ACCENT_SOFT, AMBER, BG, BORDER, CATEGORIES, GREEN, ON_ACCENT, PANEL, PANEL_ALT, RED,
+    TEXT, TEXT_DIM, TRACK, button, card, gesture_glyph, gesture_label, label, option_menu, resolve, set_accent,
+    switch,
+)
 
-BG = "#0a0e14"
-PANEL = "#121a2b"
-PANEL_ALT = "#0f1624"
-ACCENT = "#3d9bff"
-GREEN = "#31d488"
-RED = "#ff5a5f"
-TEXT = "#e9ecef"
-TEXT_DIM = "#8b96a8"
+__version__ = "1.2.0"
 
-GESTURE_LABELS = {
-    "open_palm": "Open Palm",
-    "fist": "Fist",
-    "pinch": "Pinch",
-    "two_fingers": "Two Fingers",
-    "point": "Point",
-    "swipe_left": "Swipe Left",
-    "swipe_right": "Swipe Right",
-    "unknown": "Unknown",
-    "none": "No Hand",
-}
-
-# (config key, display label, functional-in-this-version)
-CATEGORY_CARDS = [
-    ("mouse_control", "Mouse Control", True),
-    ("media_control", "Media Control", True),
-    ("presentation", "Presentation", True),
-    ("volume_control", "Volume Control", True),
-    ("smart_home", "Smart Home", False),
-    ("ai_assistant", "AI Assistant", False),
-]
-
+# (page name, subtitle, glyph)
 NAV_ITEMS = [
-    "Dashboard", "Gesture Settings", "System Controls",
-    "Media & Presentation", "Smart Home", "AI Assistant", "Settings",
+    ("Dashboard", "Live overview", "⌂"),
+    ("Gesture Studio", "Mappings, sensitivity, practice", "✋"),
+    ("Training Studio", "Teach your own gestures", "◉"),
+    ("System Controls", "Mouse & Keyboard", "➤"),
+    ("Media & Presentation", "Music, Video, Slides", "♫"),
+    ("Smart Home", "IoT Device Control", "⌂"),
+    ("AI Insights", "Usage & suggestions", "✦"),
+    ("Clipboard", "Copy, paste, history", "❐"),
+    ("Profiles", "Work, Presentation, Media…", "▤"),
+    ("Settings", "General & Privacy", "⚙"),
 ]
+
+# dashboard shortcut cards: (config key, description, page it opens)
+FEATURE_CARDS = [
+    ("mouse_control", "Move, click, scroll, drag", "System Controls"),
+    ("media_control", "Play, pause, volume, skip", "Media & Presentation"),
+    ("presentation", "Next, previous slide", "Media & Presentation"),
+    ("smart_home", "Webhooks for your hub", "Smart Home"),
+    ("ai_assistant", "Insights & custom gestures", "AI Insights"),
+]
+
+GUIDE_GESTURES = BUILTIN_GESTURES[:8]  # the dashboard guide has room for eight
+_ENGINE_KEYS = ("pinch_threshold", "swipe_min_distance", "swipe_max_duration", "cooldown_seconds",
+                "stable_frames", "pose_hold_seconds")
+_CONTROLLER_KEYS = ("cursor_smoothing", "cursor_dead_zone", "active_area_margin", "scroll_speed",
+                    "drag_hold_seconds", "engage_seconds", "double_click_seconds")
+_RECORD_LIMIT = 300  # samples per recording run; it stops by itself there
+PREVIEW_PAGES = ("Dashboard", "Training Studio")
+REST_EDGE = 0.98  # wrist this low in the frame = a resting hand (chosen from recorded real use)
+
+
+def _bind_click(widget, callback) -> None:
+    widget.bind("<Button-1>", lambda _e: callback())
+    for child in widget.winfo_children():
+        _bind_click(child, callback)
 
 
 class App(ctk.CTk):
@@ -64,406 +85,1267 @@ class App(ctk.CTk):
         super().__init__()
         self.config_data = config
         self.config_path = config_path
+        root = config_path.parent.parent
+        self.log_dir = root / "logs"
+        self.model_path = root / "assets" / "models" / "hand_landmarker.task"
 
-        ctk.set_appearance_mode("dark")
+        ctk.set_appearance_mode(config["theme"])
+        config["accent_color"] = set_accent(config["accent_color"])  # before any widget is built
         self.title("TouchlessX — Control Your World with Hand Gestures")
-        self.geometry("1320x840")
-        self.minsize(1100, 720)
+        width = min(1400, self.winfo_screenwidth() - 40)
+        height = min(900, self.winfo_screenheight() - 80)
+        self.geometry(f"{width}x{height}+20+25")
+        self.minsize(1100, 700)
         self.configure(fg_color=BG)
 
-        sens = config.get("sensitivity", {})
-        self.gesture_engine = GestureEngine(
-            pinch_threshold=sens.get("pinch_threshold", 0.4),
-            swipe_min_distance=sens.get("swipe_min_distance", 0.15),
-            swipe_max_duration=sens.get("swipe_max_duration", 0.6),
-            cooldown_seconds=sens.get("cooldown_seconds", 0.6),
-        )
-        self.safety = SafetyGuard(confidence_threshold=sens.get("confidence_threshold", 0.6))
+        self.smart_home = SmartHomeClient(config_path.parent / "smart_home.json")
+        self.dataset = GestureDataset(root / "data" / "gesture_samples.csv")
+        self.models = ModelManager(root / "data" / "models")
+        self.action_log = ActionLog(self.log_dir / "actions.log")
+        self.frame_log = FrameLog(self.log_dir / "frames.csv")
+        self.history = History(root / "data" / "history.db")
+        self.history.prune(int(config["history_retention_days"]))
+        self.profiles = ProfileStore(config_path.parent / "profiles.json")
+        if config["active_profile"] not in self.profiles.profiles:
+            # The active profile's file entry is gone: recreate it from what is in use now.
+            try:
+                config["active_profile"] = clean_name(config["active_profile"])
+            except ProfileError:
+                config["active_profile"] = "Default"
+            self.profiles.set(config["active_profile"], config)
+        self.last_event = None
+        self.mini: MiniController | None = None
+        self._mini_gesture = "–"
+        self.stats = SessionStats()
+        self.safety = SafetyGuard()
+        self.gesture_engine = GestureEngine(custom_classifier=self.models.load_active())
 
         self._input_unavailable = False
         try:
-            executor = PyAutoGuiExecutor()
+            self.executor = PyAutoGuiExecutor()
         except Exception:
-            executor = NullExecutor()
+            self.executor = NullExecutor()
             self._input_unavailable = True
+        self.action_controller = ActionController(self.executor, self.safety, {}, smart_home=self.smart_home)
+        # Called on the worker thread, so it only posts a message for the UI thread.
+        self.action_controller.callbacks["show_app"] = lambda: self._events.put(("show_window",))
+        self.executor.own_window_handler = lambda what: self._events.put(("own_window", what))
+        self.clipboard = ClipboardHistory()
+        self.action_controller.callbacks["paste_previous"] = self._request_paste_previous
+        self._practice = False
+        self._preferred_hand = "any"
+        self._mirror_preview = True
 
-        self.action_controller = ActionController(
-            executor=executor,
-            safety=self.safety,
-            enabled=dict(config.get("enabled", {})),
-            cursor_smoothing=sens.get("cursor_smoothing", 0.5),
-        )
+        self.camera = Camera(config["camera_index"], config["frame_width"], config["frame_height"])
+        self._pending_camera: Camera | None = None
 
-        self.camera = Camera(
-            index=config.get("camera_index", 0),
-            width=config.get("frame_width", 960),
-            height=config.get("frame_height", 540),
-        )
-        self.tracker = HandTracker()
-
-        self._frame_queue: queue.Queue = queue.Queue(maxsize=2)
+        self._events: queue.Queue = queue.Queue()
+        self._latest: tuple | None = None
+        self._latest_lock = threading.Lock()
         self._stop_event = threading.Event()
-        self._recent_actions: deque = deque(maxlen=20)
-        self._confidence_history: deque = deque(maxlen=60)
-        self._total_gestures = 0
-        self._session_start = time.monotonic()
-        self._toggle_vars: dict[str, ctk.BooleanVar] = {}
+        self._tracking_wanted = threading.Event()
+        self._tracking_wanted.set()
+        self._camera_running = False
+        self._auto_retries = 0
+        self._show_landmarks = True
+        self._recording: dict | None = None
+        self._record_result = ""
+        self._recent: deque = deque(maxlen=5)
+        self._save_job = None
+        self._loading = False
+        self._shown: dict[str, object] = {}  # last value pushed to each live widget
+        self._pages: dict[str, ctk.CTkFrame] = {}
+        self._current_page = "Dashboard"
 
+        self.toggle_vars: dict[str, ctk.BooleanVar] = {}
+        for key, *_ in CATEGORIES:
+            var = ctk.BooleanVar(value=bool(config["enabled"].get(key, False)))
+            var.trace_add("write", lambda *_a, k=key: self._on_toggle(k))
+            self.toggle_vars[key] = var
+
+        self._blank_image = ctk.CTkImage(Image.new("RGBA", (1, 1), (0, 0, 0, 0)), size=(1, 1))
         self._build_layout()
-        if self._input_unavailable:
-            self._log_system_note(
-                "Input control unavailable (preview-only mode) - "
-                "check OS accessibility/input permissions for this app."
-            )
+        self._apply_config()
 
-        self._worker = threading.Thread(target=self._capture_loop, daemon=True)
+        self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.bind("<space>", lambda _e: self._toggle_pause())
-        self.after(30, self._poll_queue)
-        self.after(1000, self._tick_session_stats)
+        self.bind("<space>", self._on_pause_key)
+        self.bind("<Escape>", lambda _e: self._set_paused(True))
+        self.after(15, self._poll)
+        self.after(1000, self._tick)
+        if config["mini_controller"]:
+            self.after(600, lambda: self.set_mini_controller(True, save=False))
+        if not config["onboarded"]:
+            self.after(300, lambda: self.show_page("Getting Started"))
+
+    # ------------------------------------------------------- state / settings
+    def _apply_config(self) -> None:
+        """Pushes every value in `config_data` into the live pipeline objects."""
+        config, sens = self.config_data, self.config_data["sensitivity"]
+        for key in _ENGINE_KEYS:
+            setattr(self.gesture_engine, key, sens[key])
+        for key in _CONTROLLER_KEYS:
+            setattr(self.action_controller, key, sens[key])
+        self.safety.confidence_threshold = sens["confidence_threshold"]
+        self.action_controller.enabled = config["enabled"]
+        self.action_controller.mappings = config["mappings"]
+        self.action_controller.drag_enabled = bool(config["drag_enabled"])
+        self.action_controller.presentation_keys = config["presentation_keys"]
+        self.action_controller.shortcuts = config["shortcuts"]
+        self.action_controller.confirm_smart_home = bool(config["confirm_smart_home"])
+        self.action_controller.scroll_invert = bool(config["scroll_invert"])
+        self.action_controller.scroll_style = config["scroll_style"]
+        self.action_controller.apps = config["apps"]
+        self.action_controller.emergency_gesture = config["emergency_gesture"]
+        calibration = config["calibration"]
+        self.action_controller.calibration = tuple(calibration) if calibration else None
+        self._preferred_hand = config["preferred_hand"]
+        self._mirror_preview = bool(config["mirror_preview"])
+        self.gesture_engine.rest_edge = REST_EDGE if config["ignore_resting_hand"] else None
+        self._sync_gestures()
+        self.history.enabled = bool(config["history_enabled"])
+        self.action_log.enabled = bool(config["action_log_enabled"])
+        self.frame_log.enabled = bool(config["action_log_enabled"])
+        self._show_landmarks = bool(config["show_landmarks"])
+        self._loading = True  # syncing the switches to the config is not a change to save
+        for key, var in self.toggle_vars.items():
+            var.set(bool(config["enabled"].get(key, False)))
+        self._loading = False
+        self._refresh_guide()
+
+    def _schedule_save(self) -> None:
+        if self._loading:
+            return
+        # Debounced: dragging a slider fires dozens of changes a second.
+        if self._save_job is not None:
+            self.after_cancel(self._save_job)
+        self._save_job = self.after(400, self._save_now)
+
+    def _save_now(self) -> None:
+        self._save_job = None
+        # Whatever is live belongs to the active profile, so editing a setting edits the profile.
+        self.profiles.set(self.config_data["active_profile"], self.config_data)
+        save_config(self.config_path, self.config_data)
+
+    def _on_toggle(self, key: str) -> None:
+        value = bool(self.toggle_vars[key].get())
+        self.config_data["enabled"][key] = value
+        if key == "ai_assistant":
+            self.gesture_engine.custom_enabled = value
+        status = self._quick_status.get(key)
+        if status is not None:
+            status.configure(text="Enabled" if value else "Disabled", text_color=GREEN if value else TEXT_DIM)
+        self._schedule_save()
+
+    def set_sensitivity(self, key: str, value: float) -> None:
+        self.config_data["sensitivity"][key] = value
+        if key in _ENGINE_KEYS:
+            setattr(self.gesture_engine, key, value)
+        elif key in _CONTROLLER_KEYS:
+            setattr(self.action_controller, key, value)
+        elif key == "confidence_threshold":
+            self.safety.confidence_threshold = value
+        self._schedule_save()
+
+    def set_option(self, key: str, value) -> None:
+        self.config_data[key] = value
+        if key == "drag_enabled":
+            self.action_controller.drag_enabled = bool(value)
+        elif key == "presentation_keys":
+            self.action_controller.presentation_keys = value
+        elif key == "action_log_enabled":
+            self.action_log.enabled = bool(value)
+            self.frame_log.enabled = bool(value)
+        elif key == "show_landmarks":
+            self._show_landmarks = bool(value)
+        elif key == "scroll_invert":
+            self.action_controller.scroll_invert = bool(value)
+        elif key == "scroll_style":
+            self.action_controller.scroll_style = value
+        elif key == "ignore_resting_hand":
+            self.gesture_engine.rest_edge = REST_EDGE if value else None
+        elif key == "clipboard_history" and not value:
+            self.clipboard.clear()
+        elif key == "emergency_gesture":
+            self.action_controller.emergency_gesture = value
+        elif key == "calibration":
+            self.action_controller.calibration = tuple(value) if value else None
+        elif key == "preferred_hand":
+            self._preferred_hand = value
+        elif key == "mirror_preview":
+            self._mirror_preview = bool(value)
+        elif key == "confirm_smart_home":
+            self.action_controller.confirm_smart_home = bool(value)
+        elif key == "history_enabled":
+            self.history.enabled = bool(value)
+        elif key == "history_retention_days":
+            self.history.prune(int(value))
+        elif key == "accent_color":
+            self.config_data[key] = set_accent(value)
+            # Every widget holds the same colour lists, so redrawing them is enough.
+            ctk.AppearanceModeTracker.update_callbacks()
+            self._shown.clear()
+            self._sync_pause_ui()
+            self._highlight_nav(self._current_page)
+            self._draw_chart()
+        elif key == "theme":
+            ctk.set_appearance_mode(value)
+            self._shown.clear()  # cached colours are stale now
+            self._draw_chart()
+        self._schedule_save()
+
+    def set_shortcut(self, name: str, keys: list[str] | None) -> None:
+        """Adds/replaces a named keyboard shortcut, or removes it when `keys` is None."""
+        if keys is None:
+            self.config_data["shortcuts"].pop(name, None)
+            self.unmap_action("shortcut:" + name)
+        else:
+            self.config_data["shortcuts"][name] = keys
+        self._schedule_save()
+
+    def set_practice(self, on: bool) -> None:
+        """Practice mode: gestures are recognised and shown, but nothing is sent."""
+        self._practice = bool(on)
+        self._update_dry_run()
+
+    def _update_dry_run(self) -> None:
+        # Training is kept apart from live control: while the Training Studio is open,
+        # the poses being recorded must not click or scroll anything.
+        training = self._current_page == "Training Studio"
+        on = self._practice or training
+        if on != self.action_controller.dry_run:
+            self.action_controller.release()
+            self.action_controller.dry_run = on
+        if on:
+            self.practice_badge.configure(text="TRAINING · CONTROL OFF" if training else "PRACTICE MODE")
+            self.practice_badge.pack(side="right", padx=8, before=self.camera_button)
+        else:
+            self.practice_badge.pack_forget()
+        self._refresh_mini()
+
+    def set_app(self, name: str, path: str | None) -> None:
+        """Adds a launchable application, or removes it when `path` is None."""
+        if path is None:
+            self.config_data["apps"].pop(name, None)
+            self.unmap_action("app:" + name)
+        else:
+            self.config_data["apps"][name] = path
+        self._schedule_save()
+
+    def set_gesture_setting(self, gesture: str, key: str, value) -> None:
+        """Per-gesture override: "enabled" (bool), "confidence" or "cooldown" (number,
+        or None to follow the global setting)."""
+        settings = self.config_data["gesture_settings"].setdefault(gesture, {})
+        if value is None or (key == "enabled" and value):
+            settings.pop(key, None)
+        else:
+            settings[key] = value
+        if not settings:
+            self.config_data["gesture_settings"].pop(gesture, None)
+        self._sync_gestures()
+        self._schedule_save()
+
+    def set_mini_controller(self, on: bool, save: bool = True) -> None:
+        if on and self.mini is None:
+            self.mini = MiniController(self)
+            self._shown.pop("mini", None)
+            self._refresh_mini()
+        elif not on and self.mini is not None:
+            self.mini.destroy()
+            self.mini = None
+        if save:
+            self.config_data["mini_controller"] = bool(on)
+            self._schedule_save()
+
+    # -------------------------------------------------------------- clipboard
+    def _request_paste_previous(self) -> bool:
+        """Worker thread: is there an earlier copy? If so the UI thread pastes it."""
+        if self.clipboard.previous() is None:
+            return False
+        self._events.put(("paste_clip", 1))
+        return True
+
+    def copy_to_clipboard(self, text: str) -> None:
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update_idletasks()  # hand it to the system clipboard now
+        self.clipboard.add(text)
+
+    def _paste_clip(self, index: int) -> None:
+        if index >= len(self.clipboard.items):
+            return
+        self.copy_to_clipboard(self.clipboard.items[index])
+        # Give the system a moment to take the new clipboard before the paste keystroke.
+        self.after(120, lambda: self.action_controller.run_action("paste", force=True))
+
+    def _watch_clipboard(self) -> None:
+        if not self.config_data["clipboard_history"]:
+            return
+        try:
+            text = self.clipboard_get()
+        except tk.TclError:
+            return  # empty, or not text (an image, a file)
+        if self.clipboard.add(text):
+            page = self._pages.get("Clipboard")
+            if page is not None and self._current_page == "Clipboard":
+                page.rebuild()
+
+    def show_window(self) -> None:
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def finish_onboarding(self) -> None:
+        self.config_data["onboarded"] = True
+        self._schedule_save()
+        self.show_page("Dashboard")
+
+    # --------------------------------------------------------------- profiles
+    def switch_profile(self, name: str) -> None:
+        if name not in self.profiles.profiles or name == self.config_data["active_profile"]:
+            self.profile_menu.set(self.config_data["active_profile"])
+            return
+        if self._save_job is not None:  # pending edits belong to the profile being left
+            self.after_cancel(self._save_job)
+            self._save_now()
+        self.action_controller.release()
+        self.config_data.update(self.profiles.get(name))
+        self.config_data["active_profile"] = name
+        self._apply_config()
+        self._schedule_save()
+        self.refresh_profiles()
+        self._rebuild_pages()
+
+    def refresh_profiles(self) -> None:
+        """Re-syncs the header's profile picker after profiles were added/renamed/removed."""
+        self.profile_menu.configure(values=self.profiles.names())
+        self.profile_menu.set(self.config_data["active_profile"])
+
+    def _rebuild_pages(self) -> None:
+        for page in self._pages.values():
+            page.destroy()
+        self._pages.clear()
+        if self._current_page != "Dashboard":
+            self.show_page(self._current_page)
+
+    def _sync_gestures(self) -> None:
+        """Derives everything the engine and controller need to know per gesture from
+        the mappings and the gesture library settings."""
+        controller, engine = self.action_controller, self.gesture_engine
+        settings = self.config_data["gesture_settings"]
+        controller.disabled_gestures = {g for g, s in settings.items() if s.get("enabled") is False}
+        controller.gesture_confidence = {g: s["confidence"] for g, s in settings.items() if "confidence" in s}
+        engine.cooldowns = {g: s["cooldown"] for g, s in settings.items() if "cooldown" in s}
+        used = {controller.emergency_gesture}
+        engine.muted = {g for g in OPTIONAL_GESTURES if controller.action_for(g) == "none" and g not in used}
+        # One shared set, so the engine and the controller always agree on which poses are held.
+        kinds = continuous_poses({g: controller.action_for(g) for g in controller.mappings})
+        engine.continuous_gestures = controller.continuous_gestures = kinds
+
+    def set_mapping(self, gesture: str, action: str) -> None:
+        self.config_data["mappings"][gesture] = action
+        self._sync_gestures()
+        self._refresh_guide()
+        self._schedule_save()
+
+    def unmap_gesture(self, gesture: str) -> None:
+        if self.config_data["mappings"].pop(gesture, None) is not None:
+            self._schedule_save()
+
+    def unmap_action(self, action: str) -> None:
+        for gesture, mapped in list(self.config_data["mappings"].items()):
+            if mapped == action:
+                self.set_mapping(gesture, "none")
+
+    def reset_settings(self) -> None:
+        """Puts the active profile's mappings, sensitivity and switches back to defaults.
+        Camera, theme, privacy choices, shortcuts and other profiles are left alone."""
+        self.action_controller.release()
+        for key in PROFILE_KEYS:
+            self.config_data[key] = copy.deepcopy(DEFAULT_CONFIG[key])
+        self._apply_config()
+        self._schedule_save()
+        self._rebuild_pages()
+
+    def all_gestures(self) -> list[str]:
+        return list(BUILTIN_GESTURES) + [CUSTOM_PREFIX + name for name in self.dataset.labels()]
+
+    @property
+    def camera_running(self) -> bool:
+        return self._camera_running
+
+    def input_ok(self) -> bool:
+        return not self._input_unavailable and self.executor.has_permission()
+
+    def suggestions(self) -> list[str]:
+        return build_suggestions(
+            self.stats, camera_ok=self._camera_running, input_ok=self.input_ok(), paused=self.safety.paused,
+            custom_gestures=len(self.dataset.labels()), gesture_label=gesture_label,
+            brief_poses=self.gesture_engine.brief_poses,
+        )
+
+    def versions_text(self) -> str:
+        import mediapipe
+
+        return (
+            f"TouchlessX {__version__}  ·  Python {platform.python_version()}  ·  {platform.system()} {platform.release()}\n"
+            f"OpenCV {cv2.__version__}  ·  MediaPipe {mediapipe.__version__}  ·  "
+            f"CustomTkinter {ctk.__version__}  ·  Tk {tk.TkVersion}"
+        )
+
+    def test_action(self, action: str, delay_ms: int, done) -> None:
+        """Fires one action from a UI test button (bypasses pause and category toggles)."""
+        def fire() -> None:
+            ok = self.input_ok() and not self.action_controller.dry_run
+            if ok:
+                try:
+                    ok = self.action_controller.run_action(action, force=True) is not None
+                except Exception:
+                    ok = False
+            done(ok)
+
+        self.after(delay_ms, fire)
+
+    # --------------------------------------------------------- camera control
+    def start_tracking(self) -> None:
+        self._tracking_wanted.set()
+        self._set_camera_status("● Starting camera…", TEXT_DIM)
+
+    def stop_tracking(self) -> None:
+        self._auto_retries = 99  # an explicit stop must not be undone by the auto-retry
+        self._tracking_wanted.clear()
+
+    def _toggle_tracking(self) -> None:
+        if self._tracking_wanted.is_set():
+            self.stop_tracking()
+        else:
+            self._auto_retries = 0
+            self.start_tracking()
+
+    def restart_camera(self, index: int, width: int, height: int) -> None:
+        self.config_data.update(camera_index=index, frame_width=width, frame_height=height)
+        self._schedule_save()
+        self._auto_retries = 0
+        self._pending_camera = Camera(index, width, height)
+        self.start_tracking()
+
+    # ---------------------------------------------------------------- training
+    def start_recording(self, name: str) -> None:
+        name = CustomGestureStore.validate_name(name)
+        if not self._camera_running:
+            raise CustomGestureError("Start the camera first.")
+        self._recording = {"name": name, "samples": [], "start": time.monotonic() + 2.0, "last": 0.0,
+                           "paused": False, "done": False}
+
+    def pause_recording(self, paused: bool) -> None:
+        if self._recording is not None:
+            self._recording["paused"] = paused
+
+    def stop_recording(self) -> None:
+        """Ends the recording run and adds what was captured to the dataset."""
+        rec, self._recording = self._recording, None
+        if rec is None:
+            return
+        rec["done"] = True
+        if not rec["samples"]:
+            self._record_result = "Nothing was recorded - no hand was visible."
+            return
+        try:
+            total = self.dataset.add_samples(rec["name"], rec["samples"])
+        except CustomGestureError as exc:
+            self._record_result = str(exc)
+            return
+        self.config_data["mappings"].setdefault(CUSTOM_PREFIX + rec["name"], "none")
+        self._schedule_save()
+        self._record_result = (f"Added {len(rec['samples'])} samples to '{rec['name']}' ({total} in total). "
+                               "Train the model to use them.")
+
+    def recording_status(self) -> tuple[str, bool]:
+        """(status text, is a recording in progress?)."""
+        rec = self._recording
+        if rec is None:
+            return self._record_result, False
+        remaining = rec["start"] - time.monotonic()
+        if remaining > 0:
+            return f"Get ready to hold '{rec['name']}'…  {math.ceil(remaining)}", True
+        state = "Paused" if rec["paused"] else "Recording"
+        return f"{state} '{rec['name']}' - {len(rec['samples'])} samples this run", True
+
+    def train_model(self) -> dict:
+        """Trains on the dataset, stores the model as a new version and starts using it.
+        Returns the evaluation report; raises TrainingError if there is too little data."""
+        bundle = train(self.dataset)
+        self.models.save(bundle)
+        self.gesture_engine.custom_classifier = self.models.load_active()
+        self.toggle_vars["ai_assistant"].set(True)  # a model nobody consults would be pointless
+        return bundle["report"]
+
+    def use_model(self, version: int) -> None:
+        self.gesture_engine.custom_classifier = self.models.activate(version)
+
+    def remove_training_label(self, name: str) -> None:
+        self.dataset.delete(name)
+        self.unmap_gesture(CUSTOM_PREFIX + name)
+
+    def rename_training_label(self, old: str, new: str) -> str:
+        new = self.dataset.rename(old, new)
+        mappings = self.config_data["mappings"]
+        if new != old and CUSTOM_PREFIX + old in mappings:
+            mappings[CUSTOM_PREFIX + new] = mappings.pop(CUSTOM_PREFIX + old)
+            self._sync_gestures()
+            self._schedule_save()
+        return new
+
+    # ----------------------------------------------------------------- pause
+    def _on_pause_key(self, _event) -> None:
+        if isinstance(self.focus_get(), tk.Entry):
+            return  # typing a space into a text field
+        self._set_paused(not self.safety.paused)
+
+    def toggle_pause(self) -> None:
+        self._set_paused(not self.safety.paused)
+
+    def _set_paused(self, paused: bool) -> None:
+        self.safety.set_paused(paused)
+        if paused:
+            self.action_controller.release()
+        self._sync_pause_ui()
+
+    def emergency_stop(self) -> None:
+        """The big red button: stops all gesture control at once. Works whatever the
+        camera, tracker or gesture state is - it never depends on a gesture being seen."""
+        if self.safety.paused:
+            self._set_paused(False)
+        else:
+            self._set_paused(True)
+            self.safety.set_locked(False)  # resuming should not land in a second, hidden block
+            self._sync_pause_ui()
+
+    def unlock(self) -> None:
+        self.safety.set_locked(False)
+        self._sync_pause_ui()
+
+    def _sync_pause_ui(self) -> None:
+        state = (self.safety.paused, self.safety.locked)
+        if self._shown.get("safety") == state:
+            return
+        self._shown["safety"] = state
+        paused, locked = state
+        self.pause_button.configure(
+            text="▶  Resume" if paused else "❚❚  Pause", fg_color=RED if paused else ACCENT,
+            hover_color=RED if paused else ACCENT_HOVER,
+        )
+        self.stop_button.configure(
+            text="▶  RESUME CONTROL" if paused else "■  EMERGENCY STOP",
+            fg_color=GREEN if paused else RED, hover_color=GREEN if paused else RED,
+        )
+        if locked:
+            self.lock_badge.pack(side="right", padx=8, before=self.camera_button)
+        else:
+            self.lock_badge.pack_forget()
+        self._refresh_mini()
+        if paused:
+            self._set_status_row("Safety", "Stopped", RED)
+        elif locked:
+            self._set_status_row("Safety", "Locked", AMBER)
+        else:
+            self._set_status_row("Safety", "Running", GREEN)
 
     # ---------------------------------------------------------------- layout
     def _build_layout(self) -> None:
         self.grid_columnconfigure(0, weight=0)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
-
         self._build_header()
         self._build_sidebar()
-
-        self.content = ctk.CTkFrame(self, fg_color=BG)
-        self.content.grid(row=1, column=1, sticky="nsew", padx=(0, 16), pady=(0, 16))
-        self.content.grid_columnconfigure(0, weight=3)
-        self.content.grid_columnconfigure(1, weight=1)
-        self.content.grid_rowconfigure(0, weight=1)
-
-        self._build_dashboard(self.content)
-        self._build_right_panel(self.content)
+        self.dashboard = self._build_dashboard()
+        self.dashboard.grid(row=1, column=1, sticky="nsew")
 
     def _build_header(self) -> None:
         header = ctk.CTkFrame(self, fg_color=PANEL, height=64, corner_radius=0)
         header.grid(row=0, column=0, columnspan=2, sticky="nsew")
         header.grid_propagate(False)
+        header.pack_propagate(False)
 
+        label(header, "✋", 26, color=ACCENT).pack(side="left", padx=(20, 10))
         brand = ctk.CTkFrame(header, fg_color="transparent")
-        brand.pack(side="left", padx=20, pady=8)
-        ctk.CTkLabel(brand, text="TouchlessX", font=ctk.CTkFont(size=19, weight="bold"),
-                     text_color=TEXT).pack(anchor="w")
-        ctk.CTkLabel(brand, text="Control Your World with Hand Gestures", font=ctk.CTkFont(size=11),
-                     text_color=TEXT_DIM).pack(anchor="w")
+        brand.pack(side="left", pady=8)
+        label(brand, "TouchlessX", 19, True).pack(anchor="w")
+        label(brand, "Control Your World with Hand Gestures", 11, color=TEXT_DIM).pack(anchor="w")
 
-        status = ctk.CTkFrame(header, fg_color="transparent")
-        status.pack(side="right", padx=20)
-        self.camera_status_label = ctk.CTkLabel(
-            status, text="● Starting camera…", font=ctk.CTkFont(size=12), text_color=TEXT_DIM
+        self.pause_button = ctk.CTkButton(
+            header, text="❚❚  Pause", width=110, height=34, corner_radius=8, fg_color=ACCENT,
+            hover_color=ACCENT_HOVER, text_color=ON_ACCENT, font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.toggle_pause,
         )
-        self.camera_status_label.pack(side="left", padx=12)
-        self.fps_label = ctk.CTkLabel(status, text="FPS --", font=ctk.CTkFont(size=12, weight="bold"),
-                                       text_color=TEXT, fg_color=PANEL_ALT, corner_radius=8)
-        self.fps_label.pack(side="left", ipadx=10, ipady=4)
-        self.pause_button = ctk.CTkButton(status, text="Pause", width=90, fg_color=ACCENT,
-                                           hover_color="#2d7fd6", command=self._toggle_pause)
-        self.pause_button.pack(side="left", padx=(12, 0))
+        self.pause_button.pack(side="right", padx=(8, 20))
+        self.camera_button = button(header, "Stop Camera", self._toggle_tracking, "ghost", 120)
+        self.camera_button.pack(side="right", padx=8)
+        self.practice_badge = label(header, "PRACTICE MODE", 11, True, color=AMBER, fg_color=PANEL_ALT,
+                                    corner_radius=8, width=120, height=30)  # packed only while practising
+        # Shown only while gesture control is locked; clicking it unlocks without any gesture.
+        self.lock_badge = ctk.CTkButton(
+            header, text="🔒  LOCKED · click to unlock", width=190, height=30, corner_radius=8, fg_color=AMBER,
+            hover_color=AMBER, text_color=("#ffffff", "#1a1200"), font=ctk.CTkFont(size=11, weight="bold"),
+            command=self.unlock)
+        self.fps_label = label(header, "FPS --", 12, True, fg_color=PANEL_ALT, corner_radius=8, width=70, height=30)
+        self.fps_label.pack(side="right", padx=8)
+        camera = ctk.CTkFrame(header, fg_color="transparent")
+        camera.pack(side="right", padx=12)
+        self.camera_status_label = label(camera, "● Starting camera…", 12, True, color=TEXT_DIM)
+        self.camera_status_label.pack(anchor="e")
+        self.camera_detail_label = label(camera, "", 10, color=TEXT_DIM)
+        self.camera_detail_label.pack(anchor="e")
+        self.profile_menu = option_menu(header, self.profiles.names(), self.config_data["active_profile"],
+                                        self.switch_profile, 150)
+        self.profile_menu.pack(side="right", padx=(8, 4))
+        label(header, "Profile", 11, color=TEXT_DIM).pack(side="right")
 
     def _build_sidebar(self) -> None:
-        sidebar = ctk.CTkFrame(self, fg_color=PANEL, width=220, corner_radius=0)
+        sidebar = ctk.CTkFrame(self, fg_color=PANEL, width=230, corner_radius=0)
         sidebar.grid(row=1, column=0, sticky="nsew")
-        sidebar.grid_propagate(False)
+        sidebar.pack_propagate(False)
 
-        for i, item in enumerate(NAV_ITEMS):
-            selected = item == "Dashboard"
-            btn = ctk.CTkButton(
-                sidebar, text=item, anchor="w",
-                fg_color=(ACCENT if selected else "transparent"),
-                hover_color=("#2d7fd6" if selected else PANEL_ALT),
-                text_color=TEXT if selected else TEXT_DIM,
-                corner_radius=10, height=40,
-                command=lambda name=item: self._on_nav(name),
-            )
-            btn.pack(fill="x", padx=14, pady=(14 if i == 0 else 4, 4))
+        self._nav: dict[str, tuple] = {}
+        for i, (name, subtitle, glyph) in enumerate(NAV_ITEMS):
+            item = ctk.CTkFrame(sidebar, fg_color="transparent", corner_radius=10, height=46)
+            item.pack(fill="x", padx=12, pady=(12 if i == 0 else 2, 2))
+            item.pack_propagate(False)
+            icon = label(item, glyph, 17, color=TEXT_DIM, width=30)
+            icon.pack(side="left", padx=(10, 6))
+            text = ctk.CTkFrame(item, fg_color="transparent")
+            text.pack(side="left", fill="x", expand=True)
+            title = label(text, name, 13, True, color=TEXT_DIM, anchor="w", height=18)
+            title.pack(anchor="w", pady=(7, 0))
+            sub = label(text, subtitle, 10, color=TEXT_DIM, anchor="w", height=14)
+            sub.pack(anchor="w")
+            _bind_click(item, lambda n=name: self.show_page(n))
+            self._nav[name] = (item, icon, title, sub)
+        self._highlight_nav("Dashboard")
 
-        tip = ctk.CTkFrame(sidebar, fg_color=PANEL_ALT, corner_radius=14)
-        tip.pack(fill="x", padx=14, pady=20, side="bottom")
-        ctk.CTkLabel(tip, text="Smarter Gestures,\nBetter Control", font=ctk.CTkFont(size=14, weight="bold"),
-                     text_color=TEXT, justify="left").pack(anchor="w", padx=14, pady=(14, 4))
-        ctk.CTkLabel(tip, text="On-device gesture recognition\nfor a touchless desktop.",
-                     font=ctk.CTkFont(size=11), text_color=TEXT_DIM, justify="left",
-                     wraplength=180).pack(anchor="w", padx=14, pady=(0, 14))
+        tip = card(sidebar, fg_color=PANEL_ALT)
+        tip.pack(fill="x", padx=12, pady=16, side="bottom")
+        label(tip, "Smarter Gestures,\nBetter Control", 13, True, justify="left").pack(anchor="w", padx=14,
+                                                                                         pady=(10, 0))
+        label(tip, "Processed on this computer.\nSpace or Esc pauses control.", 11,
+              color=TEXT_DIM, justify="left").pack(anchor="w", padx=14, pady=(2, 10))
 
-    def _on_nav(self, name: str) -> None:
+    def current_page_widget(self):
+        return self._pages.get(self._current_page)
+
+    def _highlight_nav(self, selected: str) -> None:
+        for name, (item, icon, title, sub) in self._nav.items():
+            active = name == selected
+            item.configure(fg_color=ACCENT if active else "transparent")
+            icon.configure(text_color=ON_ACCENT if active else TEXT_DIM)
+            title.configure(text_color=ON_ACCENT if active else TEXT_DIM)
+            sub.configure(text_color=ON_ACCENT if active else TEXT_DIM)
+
+    def show_page(self, name: str) -> None:
+        current = self.dashboard if self._current_page == "Dashboard" else self._pages.get(self._current_page)
+        if current is not None:
+            current.grid_remove()
+        if self._current_page == "Training Studio" and name != "Training Studio":
+            self.stop_recording()
+        self._current_page = name
+        self._highlight_nav(name)
+        self._update_dry_run()
         if name == "Dashboard":
-            self.content.tkraise()
+            self.dashboard.grid()
             return
-        if not hasattr(self, "_placeholder"):
-            self._placeholder = ctk.CTkFrame(self, fg_color=BG)
-            self._placeholder.grid(row=1, column=1, sticky="nsew", padx=(0, 16), pady=(0, 16))
-            self._placeholder_label = ctk.CTkLabel(self._placeholder, text="", font=ctk.CTkFont(size=16),
-                                                     text_color=TEXT_DIM, justify="center")
-            self._placeholder_label.place(relx=0.5, rely=0.45, anchor="center")
-        self._placeholder_label.configure(text=f"{name}\n\nComing in a future phase of TouchlessX.")
-        self._placeholder.tkraise()
+        page = self._pages.get(name)
+        if page is None:
+            page = self._pages[name] = PAGES[name](self)
+            page.grid(row=1, column=1, sticky="nsew")
+        else:
+            page.grid()
+            page.on_show()
 
     # ------------------------------------------------------------- dashboard
-    def _build_dashboard(self, parent) -> None:
-        left = ctk.CTkFrame(parent, fg_color="transparent")
-        left.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=16)
+    def _build_dashboard(self) -> ctk.CTkFrame:
+        dash = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        dash.grid_columnconfigure(0, weight=1)
+        dash.grid_columnconfigure(1, weight=0)
+        dash.grid_rowconfigure(0, weight=1)
 
-        video_panel = ctk.CTkFrame(left, fg_color=PANEL, corner_radius=16)
-        video_panel.pack(fill="both", expand=True)
-        self.video_label = ctk.CTkLabel(video_panel, text="Starting camera…", text_color=TEXT_DIM)
-        self.video_label.pack(fill="both", expand=True, padx=4, pady=4)
+        left = ctk.CTkFrame(dash, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=16)
+        left.grid_columnconfigure(0, weight=1)
+        left.grid_rowconfigure(0, weight=1)
+
+        self.video_panel = card(left)
+        self.video_panel.grid(row=0, column=0, sticky="nsew")
+        self.video_panel.pack_propagate(False)  # the grid sizes the panel, not the frame inside it
+        self.video_label = ctk.CTkLabel(self.video_panel, text="Starting camera…", text_color=TEXT_DIM,
+                                        font=ctk.CTkFont(size=13), justify="center")
+        self.video_label.pack(fill="both", expand=True, padx=8, pady=8)
+        self.live_chip = label(self.video_panel, "●  Starting…", 12, True, color=TEXT_DIM, fg_color=PANEL_ALT,
+                               corner_radius=8, height=30, width=130)
+        self.live_chip.place(x=18, y=18)
+        self.video_fps_chip = label(self.video_panel, "FPS --", 12, True, fg_color=PANEL_ALT, corner_radius=8,
+                                    height=30, width=70)
+        self.video_fps_chip.place(relx=1.0, x=-18, y=18, anchor="ne")
 
         cards = ctk.CTkFrame(left, fg_color="transparent")
-        cards.pack(fill="x", pady=(12, 0))
-        cards.grid_columnconfigure((0, 1, 2), weight=1)
-        self.gesture_card = self._info_card(cards, "Current Gesture", "—", 0)
-        self.confidence_card = self._info_card(cards, "Confidence", "0%", 1)
-        self.action_card = self._info_card(cards, "Last Action", "No action", 2)
+        cards.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        cards.grid_columnconfigure((0, 1, 2), weight=1, uniform="info")
+        self._build_info_cards(cards)
 
-    def _info_card(self, parent, title: str, value: str, col: int) -> ctk.CTkLabel:
-        card = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=14)
-        card.grid(row=0, column=col, sticky="nsew", padx=6)
-        ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=11), text_color=TEXT_DIM).pack(
-            anchor="w", padx=16, pady=(12, 0))
-        value_label = ctk.CTkLabel(card, text=value, font=ctk.CTkFont(size=20, weight="bold"), text_color=TEXT)
-        value_label.pack(anchor="w", padx=16, pady=(0, 14))
-        return value_label
+        features = ctk.CTkFrame(left, fg_color="transparent")
+        features.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        for col, (key, description, page) in enumerate(FEATURE_CARDS):
+            features.grid_columnconfigure(col, weight=1, uniform="feature")
+            _, title, glyph, tint = next(c for c in CATEGORIES if c[0] == key)
+            item = card(features, corner_radius=12)
+            item.grid(row=0, column=col, sticky="nsew", padx=(0 if col == 0 else 5, 0 if col == 4 else 5))
+            head = ctk.CTkFrame(item, fg_color="transparent")
+            head.pack(fill="x", padx=12, pady=(7, 0))
+            label(head, glyph, 15, color=tint, height=20).pack(side="left")
+            label(head, title, 12, True, height=20).pack(side="left", padx=(6, 0))
+            label(item, description + "  ›", 10, color=TEXT_DIM, height=16).pack(anchor="w", padx=12, pady=(0, 7))
+            _bind_click(item, lambda p=page: self.show_page(p))
+
+        bottom = ctk.CTkFrame(left, fg_color="transparent")
+        bottom.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        bottom.grid_columnconfigure((0, 1), weight=1, uniform="bottom")
+        self._build_analytics(bottom)
+        self._build_guide(bottom)
+
+        self._build_right_panel(dash)
+        return dash
+
+    def _build_info_cards(self, parent) -> None:
+        gesture = card(parent)
+        gesture.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.gesture_glyph = label(gesture, "–", 26, color=ACCENT, width=46)
+        self.gesture_glyph.pack(side="left", padx=(14, 6), pady=12)
+        text = ctk.CTkFrame(gesture, fg_color="transparent")
+        text.pack(side="left", fill="x", expand=True)
+        label(text, "Current Gesture", 11, color=TEXT_DIM).pack(anchor="w")
+        self.gesture_card = label(text, "—", 18, True)
+        self.gesture_card.pack(anchor="w")
+        self.active_badge = label(gesture, "Idle", 11, True, color=TEXT_DIM, fg_color=PANEL_ALT,
+                                  corner_radius=8, width=60, height=24)
+        self.active_badge.pack(side="right", padx=12)
+
+        confidence = card(parent)
+        confidence.grid(row=0, column=1, sticky="nsew", padx=6)
+        label(confidence, "Confidence", 11, color=TEXT_DIM).pack(anchor="w", padx=16, pady=(10, 0))
+        row = ctk.CTkFrame(confidence, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=(0, 12))
+        self.confidence_card = label(row, "0%", 18, True, width=56, anchor="w")
+        self.confidence_card.pack(side="left")
+        self.confidence_bar = ctk.CTkProgressBar(row, height=8, progress_color=GREEN, fg_color=TRACK)
+        self.confidence_bar.set(0)
+        self.confidence_bar.pack(side="left", fill="x", expand=True, padx=(8, 0))
+
+        action = card(parent)
+        action.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
+        label(action, "⚡", 24, color=AMBER, width=40).pack(side="left", padx=(14, 6))
+        text = ctk.CTkFrame(action, fg_color="transparent")
+        text.pack(side="left", fill="x", expand=True)
+        label(text, "Last Action", 11, color=TEXT_DIM).pack(anchor="w")
+        self.action_card = label(text, "No action", 18, True)
+        self.action_card.pack(anchor="w")
+
+    def _build_analytics(self, parent) -> None:
+        box = card(parent, height=174)
+        box.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        box.pack_propagate(False)
+        head = ctk.CTkFrame(box, fg_color="transparent")
+        head.pack(fill="x", padx=16, pady=(8, 2))
+        label(head, "Gesture Analytics", 14, True).pack(side="left")
+        label(head, "This session", 11, color=TEXT_DIM).pack(side="right")
+        body = ctk.CTkFrame(box, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        stats = ctk.CTkFrame(body, fg_color="transparent")
+        stats.pack(side="right", padx=(8, 4))
+        self._stat_labels: dict[str, ctk.CTkLabel] = {}
+        for key, title in (("total", "Total Gestures"), ("accuracy", "Recognised Poses"),
+                           ("latency", "Avg. Processing Time")):
+            label(stats, title, 10, color=TEXT_DIM, height=14).pack(anchor="w")
+            value = label(stats, "—", 15, True, height=22)
+            value.pack(anchor="w", pady=(0, 4))
+            self._stat_labels[key] = value
+        self.chart = tk.Canvas(body, bg=resolve(PANEL), highlightthickness=0, height=120)
+        self.chart.pack(side="left", fill="both", expand=True)
+
+    def _build_guide(self, parent) -> None:
+        box = card(parent, height=174)
+        box.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        box.pack_propagate(False)
+        head = ctk.CTkFrame(box, fg_color="transparent")
+        head.pack(fill="x", padx=16, pady=(8, 2))
+        label(head, "Gesture Guide", 14, True).pack(side="left")
+        edit = label(head, "Customize", 11, color=ACCENT, cursor="hand2")
+        edit.pack(side="right")
+        edit.bind("<Button-1>", lambda _e: self.show_page("Gesture Studio"))
+        grid = ctk.CTkFrame(box, fg_color="transparent")
+        grid.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        self._guide_labels: dict[str, ctk.CTkLabel] = {}
+        for i, gesture in enumerate(GUIDE_GESTURES):
+            grid.grid_columnconfigure(i % 4, weight=1, uniform="guide")
+            grid.grid_rowconfigure(i // 4, weight=1)
+            cell = ctk.CTkFrame(grid, fg_color=PANEL_ALT, corner_radius=10)
+            cell.grid(row=i // 4, column=i % 4, sticky="nsew", padx=3, pady=3)
+            label(cell, gesture_glyph(gesture), 17, height=20).pack(pady=(3, 0))
+            label(cell, gesture_label(gesture), 11, True, height=14).pack()
+            action = label(cell, "", 10, color=TEXT_DIM, height=14)
+            action.pack(pady=(0, 3))
+            self._guide_labels[gesture] = action
+
+    def _refresh_guide(self) -> None:
+        for gesture, action in self._guide_labels.items():
+            action.configure(text=action_label(self.action_controller.action_for(gesture)))
 
     # ----------------------------------------------------------- right panel
     def _build_right_panel(self, parent) -> None:
-        right = ctk.CTkScrollableFrame(parent, fg_color="transparent")
-        right.grid(row=0, column=1, sticky="nsew", padx=(8, 16), pady=16)
+        right = ctk.CTkScrollableFrame(parent, fg_color="transparent", width=320)
+        right.grid(row=0, column=1, sticky="nsew", padx=(0, 6), pady=16)
 
-        ctk.CTkLabel(right, text="Quick Controls", font=ctk.CTkFont(size=15, weight="bold"),
-                     text_color=TEXT).pack(anchor="w", pady=(0, 10))
+        self.stop_button = ctk.CTkButton(
+            right, text="■  EMERGENCY STOP", height=46, corner_radius=12, fg_color=RED, hover_color=RED,
+            text_color=ON_ACCENT, font=ctk.CTkFont(size=15, weight="bold"), command=self.emergency_stop)
+        self.stop_button.pack(fill="x", padx=4, pady=(0, 14))
+        label(right, "Quick Controls", 15, True).pack(anchor="w", pady=(0, 8))
         grid = ctk.CTkFrame(right, fg_color="transparent")
         grid.pack(fill="x")
-        grid.grid_columnconfigure((0, 1), weight=1)
-        for i, (key, label, functional) in enumerate(CATEGORY_CARDS):
-            self._build_toggle_card(grid, key, label, functional, row=i // 2, col=i % 2)
+        grid.grid_columnconfigure((0, 1), weight=1, uniform="quick")
+        self._quick_status: dict[str, ctk.CTkLabel] = {}
+        for i, (key, title, glyph, tint) in enumerate(CATEGORIES):
+            item = card(grid, corner_radius=12)
+            item.grid(row=i // 2, column=i % 2, sticky="nsew", padx=4, pady=4)
+            head = ctk.CTkFrame(item, fg_color="transparent")
+            head.pack(fill="x", padx=10, pady=(8, 0))
+            label(head, glyph, 16, color=tint, width=22).pack(side="left")
+            label(head, title, 12, True).pack(side="left", padx=(6, 0))
+            foot = ctk.CTkFrame(item, fg_color="transparent")
+            foot.pack(fill="x", padx=10, pady=(2, 8))
+            status = label(foot, "Enabled", 11, color=GREEN)
+            status.pack(side="left")
+            switch(foot, self.toggle_vars[key]).pack(side="right")
+            self._quick_status[key] = status
 
-        ctk.CTkLabel(right, text="Recent Gestures", font=ctk.CTkFont(size=15, weight="bold"),
-                     text_color=TEXT).pack(anchor="w", pady=(20, 10))
-        self.recent_list = ctk.CTkFrame(right, fg_color=PANEL, corner_radius=14)
-        self.recent_list.pack(fill="x")
-        self._recent_empty = ctk.CTkLabel(self.recent_list, text="No gestures yet.", text_color=TEXT_DIM)
-        self._recent_empty.pack(padx=14, pady=14, anchor="w")
+        label(right, "Recent Gestures", 15, True).pack(anchor="w", pady=(16, 8))
+        recent = card(right)
+        recent.pack(fill="x", padx=4)
+        self._recent_empty = label(recent, "No gestures yet.", 12, color=TEXT_DIM)
+        self._recent_empty.pack(padx=14, pady=12, anchor="w")
+        self._recent_rows = []
+        for _ in range(self._recent.maxlen):
+            row = ctk.CTkFrame(recent, fg_color="transparent")
+            glyph = label(row, "", 16, width=30)
+            glyph.pack(side="left")
+            text = ctk.CTkFrame(row, fg_color="transparent")
+            text.pack(side="left", padx=(6, 0))
+            title = label(text, "", 12, True, height=16)
+            title.pack(anchor="w")
+            sub = label(text, "", 11, color=TEXT_DIM, height=14)
+            sub.pack(anchor="w")
+            age = label(row, "", 11, color=TEXT_DIM)
+            age.pack(side="right")
+            self._recent_rows.append((row, glyph, title, sub, age))
 
-        ctk.CTkLabel(right, text="System Status", font=ctk.CTkFont(size=15, weight="bold"),
-                     text_color=TEXT).pack(anchor="w", pady=(20, 10))
-        status_card = ctk.CTkFrame(right, fg_color=PANEL, corner_radius=14)
-        status_card.pack(fill="x")
+        label(right, "System Status", 15, True).pack(anchor="w", pady=(16, 8))
+        status_card = card(right)
+        status_card.pack(fill="x", padx=4)
         self.status_rows: dict[str, ctk.CTkLabel] = {}
-        for key in ("Camera", "Hand Tracking", "Safety"):
+        for key in ("Mode", "Camera", "Hand Tracking", "AI Model", "System Controls", "Safety", "Latency"):
             row = ctk.CTkFrame(status_card, fg_color="transparent")
-            row.pack(fill="x", padx=14, pady=6)
-            ctk.CTkLabel(row, text=key, text_color=TEXT_DIM, font=ctk.CTkFont(size=12)).pack(side="left")
-            val = ctk.CTkLabel(row, text="—", text_color=TEXT_DIM, font=ctk.CTkFont(size=12, weight="bold"))
-            val.pack(side="right")
-            self.status_rows[key] = val
+            row.pack(fill="x", padx=14, pady=4)
+            label(row, key, 12, color=TEXT_DIM).pack(side="left")
+            value = label(row, "—", 12, True, color=TEXT_DIM)
+            value.pack(side="right")
+            self.status_rows[key] = value
+        ctk.CTkFrame(status_card, fg_color="transparent", height=4).pack()
+        self._set_status_row("Safety", "Running", GREEN)
 
-        ctk.CTkLabel(right, text="Session Stats", font=ctk.CTkFont(size=15, weight="bold"),
-                     text_color=TEXT).pack(anchor="w", pady=(20, 10))
-        stats_card = ctk.CTkFrame(right, fg_color=PANEL, corner_radius=14)
-        stats_card.pack(fill="x", pady=(0, 10))
-        self.stats_label = ctk.CTkLabel(stats_card, text="", justify="left", text_color=TEXT,
-                                         font=ctk.CTkFont(size=12))
-        self.stats_label.pack(anchor="w", padx=14, pady=14)
-        self.sparkline = tk.Canvas(stats_card, height=50, bg=PANEL, highlightthickness=0)
-        self.sparkline.pack(fill="x", padx=14, pady=(0, 14))
+        tip = card(right, fg_color=PANEL_ALT)
+        tip.pack(fill="x", padx=4, pady=(12, 4))
+        label(tip, "Tip: pinch twice quickly to double-click. Change any gesture in Gesture Studio.", 11,
+              color=TEXT_DIM,
+              justify="left", wraplength=270).pack(padx=12, pady=10, anchor="w")
 
-    def _build_toggle_card(self, parent, key: str, label: str, functional: bool, row: int, col: int) -> None:
-        card = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=12)
-        card.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
-        ctk.CTkLabel(card, text=label, font=ctk.CTkFont(size=12, weight="bold"), text_color=TEXT).pack(
-            anchor="w", padx=12, pady=(10, 2))
-        if functional:
-            enabled_now = self.config_data.get("enabled", {}).get(key, True)
-            var = ctk.BooleanVar(value=enabled_now)
-            switch = ctk.CTkSwitch(card, text="Enabled" if enabled_now else "Disabled", variable=var)
-            switch.configure(command=lambda k=key, v=var, sw=switch: self._on_toggle(k, v, sw))
-            switch.pack(anchor="w", padx=12, pady=(0, 10))
-            self._toggle_vars[key] = var
-        else:
-            ctk.CTkLabel(card, text="Coming soon", font=ctk.CTkFont(size=11), text_color=TEXT_DIM).pack(
-                anchor="w", padx=12, pady=(0, 10))
+    def _set_status_row(self, key: str, text: str, color: str) -> None:
+        if self._shown.get("status:" + key) != (text, color):
+            self._shown["status:" + key] = (text, color)
+            self.status_rows[key].configure(text=text, text_color=color)
 
-    def _on_toggle(self, key: str, var: ctk.BooleanVar, switch: ctk.CTkSwitch) -> None:
-        value = var.get()
-        self.action_controller.enabled[key] = value
-        self.config_data.setdefault("enabled", {})[key] = value
-        switch.configure(text="Enabled" if value else "Disabled")
-        self._save_config()
-
-    def _save_config(self) -> None:
-        try:
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(self.config_data, f, indent=2)
-        except OSError:
-            pass  # Non-critical - toggles just won't persist across restarts.
-
-    # --------------------------------------------------------------- pause
-    def _toggle_pause(self) -> None:
-        paused = self.safety.toggle_pause()
-        self.pause_button.configure(text="Resume" if paused else "Pause", fg_color=RED if paused else ACCENT)
-
-    def _log_system_note(self, text: str) -> None:
-        self._recent_empty.configure(text=text)
+    def _set_camera_status(self, text: str, color: str, detail: str = "") -> None:
+        self.camera_status_label.configure(text=text, text_color=color)
+        self.camera_detail_label.configure(text=detail)
 
     # ----------------------------------------------------------- background
-    def _capture_loop(self) -> None:
-        try:
-            self.camera.start()
-        except CameraError as exc:
-            self._frame_queue.put(("error", str(exc)))
-            return
-
+    def _worker_loop(self) -> None:
+        tracker: HandTracker | None = None
         frame_times: deque = deque(maxlen=20)
+        misses = 0
+        last_label, last_time = "", 0.0
+
         while not self._stop_event.is_set():
+            if self._pending_camera is not None:
+                self.camera.stop()
+                self.camera, self._pending_camera = self._pending_camera, None
+            if not self._tracking_wanted.is_set():
+                if self.camera.is_open():
+                    self.camera.stop()
+                    self.gesture_engine.reset()
+                    self.action_controller.release()
+                    self._events.put(("stopped",))
+                time.sleep(0.05)
+                continue
+            if not self.camera.is_open():
+                try:
+                    if tracker is None:
+                        tracker = HandTracker(self.model_path)
+                    self.camera.start()
+                except (CameraError, TrackerError) as exc:
+                    self._tracking_wanted.clear()
+                    self._events.put(("error", str(exc)))
+                    continue
+                misses = 0
+                frame_times.clear()
+                self._events.put(("started",))
+
             frame = self.camera.read()
             if frame is None:
+                misses += 1
+                if misses > 150:
+                    self.camera.stop()
+                    self._tracking_wanted.clear()
+                    self._events.put(("error", "The camera stopped delivering frames."))
+                time.sleep(0.01)
                 continue
-            now = time.monotonic()
-            frame_times.append(now)
+            misses = 0
+            started = time.monotonic()
+            frame_times.append(started)
 
-            result = self.tracker.process(frame)
-            if result is not None:
-                self.tracker.draw(frame, result)
-
-            event = self.gesture_engine.update(result, now)
-            dispatch = self.action_controller.dispatch(event)
+            tracker.preferred_hand = self._preferred_hand
+            result = tracker.process(frame)
+            event = self.gesture_engine.update(result, started)
+            try:
+                dispatch = self.action_controller.dispatch(event)
+            except Exception:
+                dispatch = None  # an OS input hiccup must not take tracking down with it
+            latency_ms = (time.monotonic() - started) * 1000.0
 
             fps = 0.0
             if len(frame_times) >= 2:
                 fps = (len(frame_times) - 1) / (frame_times[-1] - frame_times[0] + 1e-6)
+            self.stats.record_frame(event, latency_ms, fps, started)
+            if result is not None and not self.action_controller.dry_run:
+                self.frame_log.record(event, self.gesture_engine.last_raw, result.landmarks, fps,
+                                      pinch_distance(result.landmarks), dispatch.label if dispatch else "")
 
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(rgb)
-            self._push_frame(("frame", image, event, dispatch, fps))
+            if dispatch is not None:
+                # A held pose dispatches every frame; report it once per run, not 30x a second.
+                held = event.name in self.gesture_engine.continuous_gestures
+                repeat = held and dispatch.label == last_label and started - last_time < 1.5
+                last_label, last_time = dispatch.label, started
+                if not repeat:
+                    self._events.put(("action", event.name, dispatch.label, event.confidence))
 
+            rec = self._recording
+            if rec is not None and not rec["done"] and not rec["paused"]:
+                if result is not None and started >= rec["start"] and started - rec["last"] >= 0.05:
+                    rec["samples"].append(result.landmarks.copy())
+                    rec["last"] = started
+                if len(rec["samples"]) >= _RECORD_LIMIT:
+                    rec["done"] = True
+                    self._events.put(("recorded",))
+
+            image = None
+            if self._current_page in PREVIEW_PAGES:
+                if result is not None and self._show_landmarks:
+                    tracker.draw(frame, result)
+                guide = self.action_controller.scroll_guide(event)
+                if guide is not None:
+                    # The neutral zone of glide scrolling: hand inside = stopped, outside = scrolling.
+                    h, w = frame.shape[:2]
+                    centre = (int(guide[0] * w), int(guide[1] * h))
+                    colour = (60, 170, 255) if guide[3] else (200, 200, 200)
+                    cv2.ellipse(frame, centre, (int(guide[2] * w), int(guide[2] * h)), 0, 0, 360, colour, 2, cv2.LINE_AA)
+                    if guide[3]:
+                        palm = (int(event.palm[0] * w), int(event.palm[1] * h))
+                        cv2.arrowedLine(frame, centre, palm, colour, 2, cv2.LINE_AA, tipLength=0.2)
+                if not self._mirror_preview:
+                    frame = cv2.flip(frame, 1)  # display only: tracking always uses the mirrored frame
+                # The frame only ever lives in memory: it is shown, then dropped.
+                image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            with self._latest_lock:
+                self._latest = (image, event, fps)
+
+        self.frame_log.flush()
         self.camera.stop()
-        self.tracker.close()
+        if tracker is not None:
+            tracker.close()
 
-    def _push_frame(self, payload: tuple) -> None:
-        """Keeps only the newest frame queued - a dropped frame is fine, a growing
-        backlog that makes the UI lag behind real hand movement is not."""
-        try:
-            self._frame_queue.put_nowait(payload)
-        except queue.Full:
-            try:
-                self._frame_queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self._frame_queue.put_nowait(payload)
-            except queue.Full:
-                pass
-
-    def _poll_queue(self) -> None:
+    # ------------------------------------------------------------ main loop
+    def _poll(self) -> None:
         try:
             while True:
-                kind, *rest = self._frame_queue.get_nowait()
-                if kind == "error":
-                    self._on_camera_error(rest[0])
-                elif kind == "frame":
-                    image, event, dispatch, fps = rest
-                    self._render_frame(image)
-                    self._update_gesture_panels(event, dispatch, fps)
+                self._handle_event(*self._events.get_nowait())
         except queue.Empty:
             pass
-        self.after(30, self._poll_queue)
+        with self._latest_lock:
+            latest, self._latest = self._latest, None
+        if latest is not None and self._camera_running:
+            image, event, fps = latest
+            self.last_event = event
+            if image is not None and self.state() != "iconic":
+                page = self._pages.get(self._current_page)
+                if self._current_page == "Dashboard":
+                    self._render_frame(image, self.video_panel, self.video_label)
+                elif hasattr(page, "preview_label") and page.preview_label.winfo_exists():
+                    self._render_frame(image, page.preview_panel, page.preview_label)
+            self._update_live_panels(event, fps)
+        self.after(15, self._poll)
 
-    def _on_camera_error(self, message: str) -> None:
-        self.video_label.configure(
-            text=f"Camera unavailable:\n{message}\n\nCheck connections/permissions and restart the app.",
-            image="",
-        )
-        self.camera_status_label.configure(text="● Camera Error", text_color=RED)
-        self.status_rows["Camera"].configure(text="Error", text_color=RED)
+    def _handle_event(self, kind: str, *data) -> None:
+        if kind == "started":
+            self._camera_running = True
+            self._auto_retries = 0
+            config = self.config_data
+            self._set_camera_status("● Camera Connected", GREEN,
+                                    f"Camera {config['camera_index']} · {config['frame_width']}×{config['frame_height']}")
+            self.camera_button.configure(text="Stop Camera")
+            self.live_chip.configure(text="●  Live Tracking", text_color=GREEN)
+            self._set_status_row("Camera", "Connected", GREEN)
+            self._set_status_row("AI Model", "Loaded", GREEN)
+            self._shown.pop("mini", None)
+            self._refresh_mini()
+        elif kind == "stopped":
+            self._camera_off("Camera stopped.\n\nPress Start Camera to resume tracking.", "● Camera Off", TEXT_DIM,
+                             "Off")
+        elif kind == "error":
+            message = data[0]
+            retrying = self._auto_retries < 10
+            if retrying:
+                # e.g. the OS camera-permission prompt is still open: try again once it is answered
+                self._auto_retries += 1
+                self.after(3000, self._retry_tracking)
+            self._camera_off(
+                f"Camera unavailable\n\n{message}\n\n"
+                + ("Retrying automatically…" if retrying else "Fix the problem, then press Start Camera."),
+                "● Camera Error", RED, "Error",
+            )
+        elif kind == "action":
+            gesture, action, confidence = data
+            if self.action_controller.dry_run:
+                action = f"Practice: {action}"  # nothing was sent, so nothing is logged
+            else:
+                self.action_log.record(gesture, action, confidence)
+                self.history.record(gesture, action, confidence)
+            self._recent.appendleft((time.monotonic(), gesture, action))
+            self.action_card.configure(text=action)
+            self._refresh_recent()
+            self._sync_pause_ui()  # a gesture may have toggled pause
+        elif kind == "recorded":
+            self.stop_recording()
+        elif kind == "paste_clip":
+            self._paste_clip(data[0])
+        elif kind == "own_window":
+            if data[0] == "minimize":
+                self.iconify()
+            else:
+                self.show_window()
+        elif kind == "show_window":
+            self.show_window()
+            self.show_page("Dashboard")
 
-    def _render_frame(self, image: Image.Image) -> None:
-        w = max(self.video_label.winfo_width(), 480)
-        h = max(self.video_label.winfo_height(), 270)
-        resized = image.resize((w, h))
-        ctk_image = ctk.CTkImage(light_image=resized, dark_image=resized, size=(w, h))
-        self.video_label.configure(image=ctk_image, text="")
-        self.video_label.image = ctk_image  # keep a reference - CTkLabel won't hold one for us
-        self.camera_status_label.configure(text="● Camera Connected", text_color=GREEN)
-        self.status_rows["Camera"].configure(text="Connected", text_color=GREEN)
+    def _retry_tracking(self) -> None:
+        if not self._camera_running and self._auto_retries < 99:
+            self.start_tracking()
 
-    def _update_gesture_panels(self, event, dispatch, fps: float) -> None:
-        self.fps_label.configure(text=f"FPS {fps:.0f}")
-        has_hand = event.name != "none"
-        self.status_rows["Hand Tracking"].configure(
-            text="Active" if has_hand else "Idle", text_color=GREEN if has_hand else TEXT_DIM
-        )
-        self.status_rows["Safety"].configure(
-            text="Paused" if self.safety.paused else "Running", text_color=RED if self.safety.paused else GREEN
-        )
+    def _camera_off(self, message: str, status: str, color: str, row_text: str) -> None:
+        self._camera_running = False
+        self.stop_recording()
+        # CTkLabel ignores image=None once an image is set, so swap in a blank one.
+        self.video_label.configure(image=self._blank_image, text=message)
+        self.video_label.image = self._blank_image
+        self._set_camera_status(status, color)
+        self.camera_button.configure(text="Start Camera")
+        self.live_chip.configure(text="●  Not tracking", text_color=color)
+        self.fps_label.configure(text="FPS --")
+        self.video_fps_chip.configure(text="FPS --")
+        self._set_status_row("Camera", row_text, color)
+        self._set_status_row("Hand Tracking", "Idle", TEXT_DIM)
+        self._shown.pop("fps", None)
+        self.last_event = None
+        self._refresh_mini("–")
 
-        label = GESTURE_LABELS.get(event.name, event.name)
-        self.gesture_card.configure(text=label)
-        self.confidence_card.configure(text=f"{event.confidence:.0f}%")
-        if has_hand:
-            self._confidence_history.append(event.confidence)
-            self._draw_sparkline()
+    def _render_frame(self, image: Image.Image, panel, target) -> None:
+        # winfo sizes are in scaled pixels, CTkImage sizes in unscaled units.
+        scale = self._get_window_scaling()
+        available_w = max(160, int(panel.winfo_width() / scale) - 20)
+        available_h = max(90, int(panel.winfo_height() / scale) - 20)
+        ratio = min(available_w / image.width, available_h / image.height)
+        size = (max(1, int(image.width * ratio)), max(1, int(image.height * ratio)))
+        ctk_image = ctk.CTkImage(light_image=image, dark_image=image, size=size)
+        target.configure(image=ctk_image, text="")
+        target.image = ctk_image  # keep a reference - CTkLabel won't hold one for us
 
-        if event.is_trigger and event.name not in ("none", "unknown"):
-            self._total_gestures += 1
-        if dispatch is not None:
-            self.action_card.configure(text=dispatch.label)
-            self._recent_actions.appendleft((time.monotonic(), label, dispatch.label))
-            self._refresh_recent_list()
+    def _show(self, key: str, widget, **options) -> None:
+        """configure() only when the value changed - redrawing CTk widgets is not free."""
+        if self._shown.get(key) != options:
+            self._shown[key] = options
+            widget.configure(**options)
 
-    def _refresh_recent_list(self) -> None:
-        for child in self.recent_list.winfo_children():
-            child.destroy()
-        if not self._recent_actions:
-            self._recent_empty = ctk.CTkLabel(self.recent_list, text="No gestures yet.", text_color=TEXT_DIM)
-            self._recent_empty.pack(padx=14, pady=14, anchor="w")
+    def _update_live_panels(self, event, fps: float) -> None:
+        fps_text = f"FPS {fps:.0f}"
+        if self._shown.get("fps") != fps_text:
+            self._shown["fps"] = fps_text
+            self.fps_label.configure(text=fps_text)
+            self.video_fps_chip.configure(text=fps_text)
+
+        has_hand = event.name not in ("none", "resting")
+        if event.name == "resting":
+            self._set_status_row("Hand Tracking", "Resting", AMBER)
+        else:
+            self._set_status_row("Hand Tracking", "Active" if has_hand else "Idle", GREEN if has_hand else TEXT_DIM)
+        self._show("gesture", self.gesture_card, text=gesture_label(event.name))
+        self._show("glyph", self.gesture_glyph, text=gesture_glyph(event.name))
+        recognised = has_hand and event.name != "unknown"
+        self._show("badge", self.active_badge, text="Active" if recognised else "Idle",
+                   text_color=GREEN if recognised else TEXT_DIM)
+        percent = int(round(event.confidence))
+        if self._shown.get("confidence") != percent:
+            self._shown["confidence"] = percent
+            self.confidence_card.configure(text=f"{percent}%")
+            self.confidence_bar.set(percent / 100.0)
+        self._sync_pause_ui()
+        self._refresh_mini(gesture_label(event.name))
+
+    def _refresh_mini(self, gesture_text: str | None = None) -> None:
+        if gesture_text is None:
+            gesture_text = self._mini_gesture
+        self._mini_gesture = gesture_text
+        if self.mini is None:
             return
-        for ts, gesture_label, action_label in list(self._recent_actions)[:8]:
-            row = ctk.CTkFrame(self.recent_list, fg_color="transparent")
-            row.pack(fill="x", padx=14, pady=6)
-            left = ctk.CTkFrame(row, fg_color="transparent")
-            left.pack(side="left")
-            ctk.CTkLabel(left, text=gesture_label, font=ctk.CTkFont(size=12, weight="bold"),
-                         text_color=TEXT).pack(anchor="w")
-            ctk.CTkLabel(left, text=action_label, font=ctk.CTkFont(size=11), text_color=TEXT_DIM).pack(anchor="w")
-            age = max(0, int(time.monotonic() - ts))
-            ctk.CTkLabel(row, text=f"{age}s ago", font=ctk.CTkFont(size=11), text_color=TEXT_DIM).pack(side="right")
+        state = (self.safety.paused, self._camera_running, self.action_controller.dry_run, gesture_text,
+                 self.safety.locked)
+        if self._shown.get("mini") != state:
+            self._shown["mini"] = state
+            self.mini.refresh(*state)
 
-    def _draw_sparkline(self) -> None:
-        canvas = self.sparkline
+    def _refresh_recent(self) -> None:
+        if self._recent and self._recent_empty.winfo_ismapped():
+            self._recent_empty.pack_forget()
+        now = time.monotonic()
+        for (row, glyph, title, sub, age), entry in zip(self._recent_rows, self._recent):
+            timestamp, gesture, action = entry
+            glyph.configure(text=gesture_glyph(gesture))
+            title.configure(text=gesture_label(gesture))
+            sub.configure(text=action)
+            seconds = int(now - timestamp)
+            age.configure(text=f"{seconds}s ago" if seconds < 60 else f"{seconds // 60}m ago")
+            if not row.winfo_ismapped():
+                row.pack(fill="x", padx=12, pady=5)
+
+    def _draw_chart(self) -> None:
+        canvas = self.chart
+        width, height = canvas.winfo_width(), canvas.winfo_height()
+        if width < 80 or height < 60:
+            return
         canvas.delete("all")
-        values = list(self._confidence_history)
+        canvas.configure(bg=resolve(PANEL))
+        border, dim = resolve(BORDER), resolve(TEXT_DIM)
+        left, right, top, bottom = 34, width - 6, 8, height - 18
+        for percent in (0, 50, 100):
+            y = bottom - (bottom - top) * percent / 100.0
+            canvas.create_line(left, y, right, y, fill=border)
+            canvas.create_text(left - 6, y, text=f"{percent}%", fill=dim, anchor="e", font=("Helvetica", 9))
+        window = self.stats.timeline.maxlen
+        canvas.create_text(left, height - 6, text=f"-{window // 60} min", fill=dim, anchor="w",
+                           font=("Helvetica", 9))
+        canvas.create_text(right, height - 6, text="now", fill=dim, anchor="e", font=("Helvetica", 9))
+        canvas.create_text((left + right) / 2, height - 6, text="tracking confidence", fill=dim,
+                           font=("Helvetica", 9))
+        values = list(self.stats.timeline)
         if len(values) < 2:
             return
-        width = max(canvas.winfo_width(), 200)
-        height = 50
-        step = width / max(1, len(values) - 1)
+        step = (right - left) / (window - 1)
+        offset = window - len(values)  # newest sample sits at the right edge
         points = []
-        for i, v in enumerate(values):
-            x = i * step
-            y = height - (v / 100.0) * (height - 6) - 3
-            points.extend([x, y])
-        canvas.create_line(*points, fill=ACCENT, width=2, smooth=True)
+        for i, value in enumerate(values):
+            points += [left + (offset + i) * step, bottom - (bottom - top) * value / 100.0]
+        canvas.create_polygon(points[0], bottom, *points, points[-2], bottom, fill=resolve(ACCENT_SOFT), outline="")
+        canvas.create_line(*points, fill=resolve(ACCENT), width=2)
 
-    def _tick_session_stats(self) -> None:
-        elapsed = int(time.monotonic() - self._session_start)
-        avg_conf = sum(self._confidence_history) / len(self._confidence_history) if self._confidence_history else 0.0
-        mins, secs = divmod(elapsed, 60)
-        self.stats_label.configure(
-            text=f"Total Gestures   {self._total_gestures}\n"
-                 f"Avg Confidence   {avg_conf:.0f}%\n"
-                 f"Session Time     {mins:02d}:{secs:02d}"
-        )
-        self._refresh_recent_list()
-        self.after(1000, self._tick_session_stats)
+    def _tick(self) -> None:
+        stats = self.stats
+        self._stat_labels["total"].configure(text=str(stats.total_gestures))
+        self._stat_labels["accuracy"].configure(text=f"{stats.accuracy:.0f}%" if stats.hand_frames else "—")
+        self._stat_labels["latency"].configure(text=f"{stats.avg_latency_ms:.0f} ms" if stats.frames else "—")
+        if self._current_page == "Dashboard":
+            self._draw_chart()
+            self._refresh_recent()
+        self._watch_clipboard()
+        self._set_status_row("Mode", self.config_data["active_profile"], TEXT)
+        try:
+            self.action_controller.refresh_screen()  # resolution or display may have changed
+        except Exception:
+            pass
+        self._set_status_row("Latency", f"{stats.avg_latency_ms:.0f} ms" if stats.frames else "—", TEXT_DIM)
+        if self.input_ok():
+            self._set_status_row("System Controls", "Ready", GREEN)
+        else:
+            self._set_status_row("System Controls", "No permission", AMBER)
+        self.after(1000, self._tick)
 
     # ------------------------------------------------------------------ end
     def _on_close(self) -> None:
         self._stop_event.set()
+        self._worker.join(timeout=2.0)  # let the worker release the camera
+        self.action_controller.release()
+        if self._save_job is not None:
+            self.after_cancel(self._save_job)
+            self._save_now()
+        self.history.close()
         self.destroy()
+
+
+class MiniController(ctk.CTkToplevel):
+    """A small always-on-top window with the state and a Pause button, so control can be
+    stopped while another application is in front."""
+
+    def __init__(self, app: App) -> None:
+        super().__init__(app, fg_color=PANEL)
+        self.app = app
+        self.title("TouchlessX")
+        self.geometry(f"270x58+{max(0, app.winfo_screenwidth() - 300)}+60")
+        self.resizable(False, False)
+        self.attributes("-topmost", True)
+        self.protocol("WM_DELETE_WINDOW", lambda: app.set_mini_controller(False))
+
+        self.dot = label(self, "●", 16, color=TEXT_DIM, width=22)
+        self.dot.pack(side="left", padx=(10, 4))
+        text = ctk.CTkFrame(self, fg_color="transparent")
+        text.pack(side="left", fill="x", expand=True)
+        self.state_label = label(text, "Starting…", 12, True, anchor="w", height=16)
+        self.state_label.pack(anchor="w", pady=(10, 0))
+        self.gesture_label = label(text, "", 11, color=TEXT_DIM, anchor="w", height=14)
+        self.gesture_label.pack(anchor="w")
+        button(self, "Open", app.show_window, "ghost", 52).pack(side="right", padx=(4, 10))
+        self.pause_button = button(self, "Pause", app.toggle_pause, "primary", 70)
+        self.pause_button.pack(side="right")
+
+    def refresh(self, paused: bool, camera_running: bool, practice: bool, gesture_text: str,
+                locked: bool = False) -> None:
+        if not camera_running:
+            state, color = "Camera off", TEXT_DIM
+        elif paused:
+            state, color = "Stopped", RED
+        elif locked:
+            state, color = "Locked", AMBER
+        elif practice:
+            state, color = "Practice mode", AMBER
+        else:
+            state, color = "Controlling", GREEN
+        self.dot.configure(text_color=color)
+        self.state_label.configure(text=state)
+        self.gesture_label.configure(text=gesture_text)
+        self.pause_button.configure(text="Resume" if paused else "Pause", fg_color=RED if paused else ACCENT,
+                                    hover_color=RED if paused else ACCENT_HOVER)
