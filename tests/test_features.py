@@ -34,6 +34,7 @@ class RecordingExecutor:
     def click_again(self): self.calls.append(("click_again",))
     def press_key(self, key): self.calls.append(("key", key))
     def scroll(self, clicks): self.calls.append(("scroll", clicks))
+    def hotkey(self, keys): self.calls.append(("hotkey", tuple(keys)))
     def hscroll(self, clicks): self.calls.append(("hscroll", clicks))
     def scroll_pixels(self, dx, dy): self.calls.append(("scroll", dy) if dy else ("hscroll", dx))
     def minimize_window(self): self.calls.append(("minimize",)); return True

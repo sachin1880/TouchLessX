@@ -13,3 +13,5 @@ config/custom_gestures.json
 data/
 config/profiles.json
 config/settings.json
+build/
+dist/

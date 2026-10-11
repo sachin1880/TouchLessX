@@ -38,6 +38,7 @@ class HandResult:
     landmarks: np.ndarray  # shape (21, 3): normalized (x, y, z) per hand landmark
     handedness: str
     score: float
+    other: "HandResult | None" = None  # a second hand in view, for two-hand gestures
 
 
 def ensure_model(path: Path) -> Path:
@@ -108,19 +109,19 @@ class HandTracker:
 
         # Frames arrive mirrored (selfie view), which is what MediaPipe's handedness
         # labels assume - so "Left" here really is the user's left hand.
-        chosen = None
+        hands = []
         for i, hand in enumerate(result.hand_landmarks):
             handedness, score = "", 1.0
             if i < len(result.handedness) and result.handedness[i]:
                 category = result.handedness[i][0]
                 handedness, score = category.category_name or "", float(category.score)
-            if self.preferred_hand in ("any", handedness.lower()):
-                chosen = (hand, handedness, score)
-                break
+            points = np.array([[lm.x, lm.y, lm.z] for lm in hand], dtype=np.float32)
+            hands.append(HandResult(landmarks=points, handedness=handedness, score=score))
+        chosen = next((h for h in hands if self.preferred_hand in ("any", h.handedness.lower())), None)
         if chosen is None:
             return None  # only the other hand is in view: it must not control anything
-        points = np.array([[lm.x, lm.y, lm.z] for lm in chosen[0]], dtype=np.float32)
-        return HandResult(landmarks=points, handedness=chosen[1], score=chosen[2])
+        chosen.other = next((h for h in hands if h is not chosen), None)
+        return chosen
 
     def draw(self, frame_bgr: np.ndarray, result: HandResult) -> None:
         """Draws landmark points, bone connections and a bounding box onto the frame, in place."""

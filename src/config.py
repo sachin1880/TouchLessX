@@ -24,6 +24,8 @@ DEFAULT_MAPPINGS = {
     "hand_open": "none",
     "point_left": "none",
     "point_right": "none",
+    "both_palms": "toggle_pause",
+    "two_hand_pinch": "zoom",
 }
 
 DEFAULT_CONFIG = {
@@ -51,6 +53,9 @@ DEFAULT_CONFIG = {
     "emergency_gesture": "none",
     "apps": {},
     "gesture_settings": {},
+    "menu_bar_icon": True,
+    "close_to_menu_bar": False,
+    "check_updates": True,
     "theme": "dark",
     "accent_color": "#2f7df6",
     "onboarded": False,

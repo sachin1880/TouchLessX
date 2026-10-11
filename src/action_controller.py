@@ -28,6 +28,7 @@ FOLLOW_SLACK = 0.006                    # tracking jitter below this moves nothi
 FOLLOW_PIXELS_PER_FRAME_HEIGHT = 3000.0
 PIXELS_PER_WHEEL_CLICK = 40.0           # for systems that only take whole wheel clicks
 MINIMIZE_MIN_INTERVAL = 2.0             # seconds between two minimise actions
+ZOOM_STEP = 0.07                        # change in distance between the hands per zoom step
 # Swipe ("flick") scrolling. Thresholds come from recorded real use: deliberate swipes
 # peaked at 0.8-2.0 frame heights per second, while steering the cursor stayed under 0.5.
 FLICK_SPEED = 0.7                       # peak speed a movement must reach to count as a swipe
@@ -430,6 +431,7 @@ ACTIONS: dict[str, ActionSpec] = {
     "scroll": ActionSpec("Scroll (follow hand)", "mouse_control", "continuous"),
     "volume": ActionSpec("Volume Up / Down", "volume_control", "continuous"),
     "safety_hold": ActionSpec("Safety Hold (do nothing)", "", "continuous"),
+    "zoom": ActionSpec("Zoom (hands apart / together)", "", "continuous"),
     "left_click": ActionSpec("Left Click", "mouse_control", "discrete"),
     "right_click": ActionSpec("Right Click", "mouse_control", "discrete"),
     "double_click": ActionSpec("Double Click", "mouse_control", "discrete"),
@@ -598,6 +600,7 @@ class ActionController:
         self._last_left_click = -1e9
         self._last_minimize = -1e9
         self._volume_remainder = 0.0
+        self._zoom_remainder = 0.0
         self.scroll_invert = False
         self.scroll_style = scroll_style
         self.scroll_vertical_only = False
@@ -716,6 +719,8 @@ class ActionController:
                 return None
             if action == "safety_hold":
                 return DispatchResult("Safety Hold", "")
+            if action == "zoom":
+                return self._zoom(event)
             if action == "move_cursor":
                 return self._move_cursor(event)
             if action == "scroll":
@@ -1124,6 +1129,21 @@ class ActionController:
             return None, 0.0
         self._scroll_axis_time = now
         return self._scroll_axis, step * FOLLOW_PIXELS_PER_FRAME_HEIGHT
+
+    def _zoom(self, event: GestureEvent) -> DispatchResult | None:
+        """Two-hand zoom: every ZOOM_STEP the hands move apart is one zoom-in step, and
+        together one zoom-out step - like stretching or squeezing the page."""
+        if event.motion_delta is None or event.hold_time < self.engage_seconds:
+            self._zoom_remainder = 0.0
+            return None
+        self._zoom_remainder += event.motion_delta[0] / ZOOM_STEP
+        steps = int(self._zoom_remainder)
+        if steps == 0:
+            return None
+        self._zoom_remainder -= steps
+        for _ in range(min(abs(steps), 3)):
+            self.executor.hotkey(edit_keys("zoom_in" if steps > 0 else "zoom_out"))
+        return DispatchResult("Zoom In" if steps > 0 else "Zoom Out", "")
 
     def _adjust_volume(self, event: GestureEvent) -> DispatchResult | None:
         if event.motion_delta is None or event.hold_time < self.engage_seconds:

@@ -33,6 +33,7 @@ from .history import History
 from .profiles import PROFILE_KEYS, ProfileError, ProfileStore, clean_name
 from .safety import SafetyGuard
 from .smart_home import SmartHomeClient
+from .system import RELEASES_PAGE, LoginItem, MenuBarIcon, check_for_update, launch_command, is_packaged
 from .training import GestureDataset, ModelManager, TrainingError, train
 from .assistant import (
     FREE_REQUEST_WORDS, SITES, AIError, LocalAI, Task, gmail_compose_url, interpret, mailto_url,
@@ -45,7 +46,7 @@ from .ui_widgets import (
     switch,
 )
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 # (page name, subtitle, glyph)
 NAV_ITEMS = [
@@ -92,11 +93,15 @@ def _bind_click(widget, callback) -> None:
 
 
 class App(ctk.CTk):
-    def __init__(self, config: dict, config_path: Path) -> None:
+    def __init__(self, config: dict, config_path: Path, app_file: Path | None = None) -> None:
         super().__init__()
         self.config_data = config
         self.config_path = config_path
         root = config_path.parent.parent
+        self.app_file = app_file or root / "app.py"
+        self.login_item = LoginItem()
+        self.menu_bar: MenuBarIcon | None = None
+        self.update_info: dict | None = None  # the result of the last update check
         self.log_dir = root / "logs"
         self.model_path = root / "assets" / "models" / "hand_landmarker.task"
 
@@ -197,6 +202,10 @@ class App(ctk.CTk):
             self.after(600, lambda: self.set_mini_controller(True, save=False))
         if config["voice_enabled"]:
             self.after(900, lambda: self.set_voice(True, save=False))
+        if config["menu_bar_icon"]:
+            self.after(500, lambda: self.set_menu_bar(True, save=False))
+        if config["check_updates"]:
+            self.after(4000, self.check_updates)
         if not config["onboarded"]:
             self.after(300, lambda: self.show_page("Getting Started"))
 
@@ -384,6 +393,47 @@ class App(ctk.CTk):
             self.config_data["mini_controller"] = bool(on)
             self._schedule_save()
 
+    # ------------------------------------------------------------------ system
+    def set_menu_bar(self, on: bool, save: bool = True) -> None:
+        """Shows or removes the menu-bar icon (macOS only; elsewhere this does nothing)."""
+        if on and self.menu_bar is None and platform.system() == "Darwin":
+            try:
+                self.menu_bar = MenuBarIcon({
+                    "show": self.show_window, "pause": self.toggle_pause, "camera": self._toggle_tracking,
+                    "voice": lambda: self.set_voice(self.voice is None), "quit": self.quit_app,
+                })
+            except Exception:
+                self.menu_bar = None  # the icon is a convenience; the app works without it
+        elif not on and self.menu_bar is not None:
+            self.menu_bar.remove()
+            self.menu_bar = None
+        if save:
+            self.config_data["menu_bar_icon"] = bool(on)
+            self._schedule_save()
+        self._sync_menu_bar()
+
+    def _sync_menu_bar(self) -> None:
+        if self.menu_bar is not None:
+            self.menu_bar.update(self.safety.paused, self._tracking_wanted.is_set(), self.voice is not None)
+
+    def set_start_at_login(self, on: bool) -> str:
+        """Adds or removes the per-user login entry; returns a message for the settings page."""
+        try:
+            if on:
+                self.login_item.enable(launch_command(self.app_file))
+                return "TouchlessX will start when you log in."
+            self.login_item.disable()
+            return "TouchlessX will no longer start at login."
+        except OSError as exc:
+            return f"Could not change the login setting: {exc}"
+
+    def check_updates(self, done=None) -> None:
+        """Looks for a newer release on a helper thread; `done(result)` runs on the UI thread."""
+        def work() -> None:
+            self._events.put(("update_checked", check_for_update(__version__), done))
+
+        threading.Thread(target=work, daemon=True).start()
+
     # ------------------------------------------------------------------ voice
     def set_voice(self, on: bool, save: bool = True) -> None:
         """Starts or stops listening for spoken commands. The microphone is only ever
@@ -414,6 +464,7 @@ class App(ctk.CTk):
             self.config_data["voice_enabled"] = bool(on)
             self._schedule_save()
         self._sync_voice_ui()
+        self._sync_menu_bar()
 
     def restart_voice(self) -> None:
         """Applies a changed wake word or assistant switch to a running listener."""
@@ -717,11 +768,13 @@ class App(ctk.CTk):
     # --------------------------------------------------------- camera control
     def start_tracking(self) -> None:
         self._tracking_wanted.set()
+        self._sync_menu_bar()
         self._set_camera_status("● Starting camera…", TEXT_DIM)
 
     def stop_tracking(self) -> None:
         self._auto_retries = 99  # an explicit stop must not be undone by the auto-retry
         self._tracking_wanted.clear()
+        self._sync_menu_bar()
 
     def _toggle_tracking(self) -> None:
         if self._tracking_wanted.is_set():
@@ -852,6 +905,7 @@ class App(ctk.CTk):
         else:
             self.lock_badge.pack_forget()
         self._refresh_mini()
+        self._sync_menu_bar()
         if paused:
             self._set_status_row("Safety", "Stopped", RED)
         elif locked:
@@ -892,6 +946,10 @@ class App(ctk.CTk):
         self.practice_badge = label(header, "PRACTICE MODE", 11, True, color=AMBER, fg_color=PANEL_ALT,
                                     corner_radius=8, width=120, height=30)  # packed only while practising
         # Shown only while gesture control is locked; clicking it unlocks without any gesture.
+        self.update_badge = ctk.CTkButton(  # packed only when a newer release exists
+            header, text="⬆  Update", width=120, height=30, corner_radius=8, fg_color=GREEN, hover_color=GREEN,
+            text_color=("#ffffff", "#06281c"), font=ctk.CTkFont(size=11, weight="bold"),
+            command=lambda: webbrowser.open((self.update_info or {}).get("url") or RELEASES_PAGE))
         self.voice_badge = label(header, "🎙  Starting…", 11, True, color=TEXT_DIM, fg_color=PANEL_ALT,
                                  corner_radius=8, width=126, height=30)  # packed only while voice is on
         self.lock_badge = ctk.CTkButton(
@@ -1268,6 +1326,8 @@ class App(ctk.CTk):
             if self._current_page in PREVIEW_PAGES:
                 if result is not None and self._show_landmarks:
                     tracker.draw(frame, result)
+                    if result.other is not None:
+                        tracker.draw(frame, result.other)
                 guide = self.action_controller.scroll_guide(event)
                 if guide is not None:
                     # The neutral zone of glide scrolling: hand inside = stopped, outside = scrolling.
@@ -1354,6 +1414,13 @@ class App(ctk.CTk):
             self._sync_pause_ui()  # a gesture may have toggled pause
         elif kind == "recorded":
             self.stop_recording()
+        elif kind == "update_checked":
+            self.update_info = data[0]
+            if data[0]["status"] == "update":
+                self.update_badge.configure(text=f"⬆  Update {data[0]['latest']}")
+                self.update_badge.pack(side="right", padx=8, before=self.camera_button)
+            if data[1] is not None:
+                data[1](data[0])
         elif kind == "voice_heard":
             self._on_voice_heard(data[0], data[1])
         elif kind == "assistant_done":
@@ -1515,6 +1582,16 @@ class App(ctk.CTk):
 
     # ------------------------------------------------------------------ end
     def _on_close(self) -> None:
+        """The window's close button: quit, or carry on in the menu bar if so configured."""
+        if self.config_data["close_to_menu_bar"] and self.menu_bar is not None:
+            self.withdraw()
+            return
+        self.quit_app()
+
+    def quit_app(self) -> None:
+        if self.menu_bar is not None:
+            self.menu_bar.remove()
+            self.menu_bar = None
         self._stop_event.set()
         self._worker.join(timeout=2.0)  # let the worker release the camera
         self.action_controller.release()

@@ -32,18 +32,24 @@ DISCRETE_GESTURES = {
 BUILTIN_GESTURES = (
     "open_palm", "point", "three_fingers", "pinch", "two_fingers", "fist", "swipe_left", "swipe_right",
     "thumbs_up", "swipe_up", "swipe_down", "hand_open", "point_left", "point_right",
+    "both_palms", "two_hand_pinch",
 )
+# Gestures made with both hands raised. While two raised hands are in view and one of
+# these is in use, only they count - single-hand gestures are suspended, so the second
+# hand joining in can't click or scroll by accident.
+TWO_HAND_GESTURES = ("both_palms", "two_hand_pinch")
+TWO_HAND_HOLD_SECONDS = 0.6  # both palms must be shown at least this long before they act
 # Hand shapes that can drive either kind of action - a continuous one (cursor, scroll,
 # volume) while held, or a one-shot one - depending on what they are mapped to.
 FLEXIBLE_POSES = ("open_palm", "point", "two_fingers", "three_fingers", "fist", "thumbs_up",
-                  "point_left", "point_right")
+                  "point_left", "point_right", "both_palms", "two_hand_pinch")
 # Gestures that are a movement rather than a pose. They are reported for a single
 # frame in place of the pose underneath, so they are only looked for while in use
 # (see `GestureEngine.muted`).
 MOTION_GESTURES = ("swipe_left", "swipe_right", "swipe_up", "swipe_down", "hand_open")
 # Gestures that are only looked for while mapped to something. An unused sideways point
 # simply counts as "point", so tilting the finger doesn't drop the cursor.
-OPTIONAL_GESTURES = MOTION_GESTURES + ("point_left", "point_right")
+OPTIONAL_GESTURES = MOTION_GESTURES + ("point_left", "point_right") + TWO_HAND_GESTURES
 # "hand_open" = the hand opening out of a fist within this many seconds.
 HAND_OPEN_WINDOW_SECONDS = 1.2
 # User-trained poses (see custom_gestures.py) are reported as "custom:<name>" and
@@ -178,6 +184,7 @@ class GestureEngine:
         self._candidate_frames = 0
         self._stable_static = "unknown"
         self._prev_palm: tuple[float, float] | None = None
+        self._prev_spread: float | None = None  # distance between the two palms, last frame
         self._last_fire_time: dict[str, float] = {}
         self._swipe_cooldown_until = 0.0
         # One-shot poses that were let go before `pose_hold_seconds` - surfaced in the
@@ -206,6 +213,7 @@ class GestureEngine:
         self._candidate_frames = 0
         self._stable_static = "unknown"
         self._prev_palm = None
+        self._prev_spread = None
 
     def _stable_pose(self, landmarks: np.ndarray) -> str:
         """The current hand shape, debounced: a new shape only counts once it has been
@@ -243,6 +251,13 @@ class GestureEngine:
             self._fist_seen_at = -1e9  # a fist that then went to rest was not "opened"
             self.last_raw = "resting"
             return GestureEvent("resting", max(0.0, min(100.0, hand_result.score * 100.0)), None, None, False)
+        other = getattr(hand_result, "other", None)
+        if (
+            other is not None and not set(TWO_HAND_GESTURES) <= self.muted
+            and (self.rest_edge is None or float(other.landmarks[WRIST][1]) <= self.rest_edge)
+        ):
+            return self._update_two_hands(hand_result, other, now)
+        self._prev_spread = None
         index_tip = (float(landmarks[INDEX_TIP][0]), float(landmarks[INDEX_TIP][1]))
         # Movement is measured at the palm, not a fingertip: the palm stays put while
         # the fingers pinch or curl, so clicking doesn't nudge the cursor.
@@ -303,6 +318,51 @@ class GestureEngine:
             self._fist_seen_at = now  # a deliberate fist (held long enough to count)
         self._prev_gesture = gesture
         return GestureEvent(gesture, confidence, index_tip, motion_delta, is_trigger, hold_time, palm)
+
+    def _update_two_hands(self, first, second, now: float) -> GestureEvent:
+        """Both hands are raised: look for a two-hand gesture and nothing else."""
+        shapes = {classify_static_gesture(hand.landmarks, self.pinch_threshold) for hand in (first, second)}
+        raw = {"open_palm": "both_palms", "pinch": "two_hand_pinch"}.get(next(iter(shapes)), "two_hands") \
+            if len(shapes) == 1 else "two_hands"
+        if raw in self.muted:
+            raw = "two_hands"
+        self.last_raw = raw
+        if raw == self._candidate:
+            self._candidate_frames += 1
+        else:
+            self._candidate, self._candidate_frames = raw, 1
+        if self._candidate_frames >= max(1, int(self.stable_frames)):
+            self._stable_static = raw
+        gesture = self._stable_static if self._stable_static in TWO_HAND_GESTURES else "two_hands"
+
+        palms = [hand.landmarks[[WRIST, INDEX_MCP, PINKY_MCP], :2].mean(axis=0) for hand in (first, second)]
+        spread = float(np.hypot(*(palms[0] - palms[1])))
+        # For a two-hand gesture "movement" is the hands moving apart (+) or together (-).
+        motion_delta = (spread - self._prev_spread, 0.0) if self._prev_spread is not None else None
+        self._prev_spread = spread
+        self._prev_palm = None            # single-hand movement starts afresh afterwards
+        self._position_history.clear()    # ...and this was not a swipe
+
+        if gesture != self._prev_gesture:
+            if is_discrete(self._prev_gesture) and not self._evaluated:
+                self.brief_poses[self._prev_gesture] += 1
+            self._gesture_since = now
+            self._evaluated = False
+        hold_time = now - self._gesture_since
+
+        is_trigger = False
+        if gesture in self.continuous_gestures:
+            is_trigger = True
+        elif gesture in TWO_HAND_GESTURES and not self._evaluated:
+            if hold_time >= max(self.pose_hold_seconds, TWO_HAND_HOLD_SECONDS):
+                self._evaluated = True
+                last_fire = self._last_fire_time.get(gesture)
+                if last_fire is None or now - last_fire >= self.cooldowns.get(gesture, self.cooldown_seconds):
+                    is_trigger = True
+                    self._last_fire_time[gesture] = now
+        self._prev_gesture = gesture
+        confidence = max(0.0, min(100.0, min(first.score, second.score) * 100.0))
+        return GestureEvent(gesture, confidence, None, motion_delta, is_trigger, hold_time, None)
 
     def _detect_swipe(self, now: float) -> str | None:
         if len(self._position_history) < 4:

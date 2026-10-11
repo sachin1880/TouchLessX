@@ -14,7 +14,12 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+from src.system import data_root
+
+SOURCE_ROOT = Path(__file__).resolve().parent
+# Settings, logs and downloaded models: the project folder when run from source, the
+# per-user application-data folder when run as a packaged application.
+ROOT = data_root(SOURCE_ROOT)
 CONFIG_PATH = ROOT / "config" / "settings.json"
 MODEL_PATH = ROOT / "assets" / "models" / "hand_landmarker.task"
 
@@ -26,6 +31,15 @@ def run_check(config: dict, seconds: float = 4.0) -> int:
     from src.gesture_engine import GestureEngine
     from src.hand_tracker import HandTracker, TrackerError
 
+    # The optional parts: are their libraries present and loadable (matters most in a packaged build)?
+    for name, modules in (("Voice commands", ("vosk", "sounddevice")), ("Free speech-to-text", ("faster_whisper",)),
+                          ("Gesture training", ("sklearn.neighbors", "joblib")), ("Interface", ("customtkinter",))):
+        try:
+            for module in modules:
+                __import__(module)
+            print(f"{name}: OK")
+        except Exception as exc:  # ImportError, or a native library that fails to load
+            print(f"{name}: UNAVAILABLE ({exc})")
     try:
         tracker = HandTracker(MODEL_PATH)
         print("Hand-tracking model: OK")
@@ -78,7 +92,8 @@ def main() -> int:
         print(f"Missing dependency: {exc}\nRun: pip install -r requirements.txt", file=sys.stderr)
         return 1
 
-    app = App(config, CONFIG_PATH)
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    app = App(config, CONFIG_PATH, app_file=SOURCE_ROOT / "app.py")
     app.mainloop()
     return 0
 

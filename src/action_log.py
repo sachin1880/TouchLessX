@@ -131,7 +131,7 @@ class SessionStats:
             if second - self._bucket_second > self.timeline.maxlen:
                 self._bucket_second = second  # long gap (camera stopped): don't backfill forever
 
-        if event.name not in ("none", "resting"):
+        if event.name not in ("none", "resting", "two_hands"):
             self.hand_frames += 1
             self._confidence_sum += event.confidence
             self._bucket_sum += event.confidence

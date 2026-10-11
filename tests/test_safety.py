@@ -139,7 +139,7 @@ def test_a_pose_is_held_or_one_shot_depending_on_its_mapping():
     click.continuous_gestures = continuous_poses({"two_fingers": "right_click"})
     assert [click.update(two, now=i * 0.04).is_trigger for i in range(3)] == [True, False, False]
 
-    assert continuous_poses(SPEC) == {"open_palm", "point", "two_fingers"}
+    assert continuous_poses(SPEC) == {"open_palm", "point", "two_fingers", "two_hand_pinch"}
 
 
 def test_spec_profile_behaves_as_specified():
@@ -370,7 +370,7 @@ def test_air_mouse_profile_is_a_complete_one_handed_mouse():
     clock = _Clock()
     controller, executor, _ = _controller(profile["mappings"], drag_enabled=True, drag_hold_seconds=0.5, clock=clock)
     controller.enabled = dict(profile["enabled"])
-    assert continuous_poses(profile["mappings"]) == {"open_palm", "point", "three_fingers"}
+    assert continuous_poses(profile["mappings"]) == {"open_palm", "point", "three_fingers", "two_hand_pinch"}
 
     def step(name, seconds=1.0, **kwargs):
         clock.now += seconds
@@ -771,3 +771,95 @@ def test_swipe_direction_can_be_reversed():
     controller, _, _, frames, _ = _swiper()
     controller.scroll_invert = True
     assert frames("open_palm", 6, dy=-0.04) == ["Scroll Down"]
+
+
+# ------------------------------------------------------------ two-hand gestures
+def _two(first, second=None, shift=0.0):
+    """A frame with a second hand; `shift` moves the second hand sideways."""
+    result = _FakeHandResult(first)
+    if second is not None:
+        moved = second.copy()
+        moved[:, 0] += shift
+        result.other = _FakeHandResult(moved)
+    return result
+
+
+PALM = _hand(index=True, middle=True, ring=True, pinky=True, thumb=True)
+
+
+def test_both_palms_fire_once_after_being_held_and_single_hand_gestures_wait():
+    engine = GestureEngine(stable_frames=2, pose_hold_seconds=0.25)
+    events = [engine.update(_two(PALM, PALM, 0.3), now=i * 0.05) for i in range(20)]   # one second
+    assert events[-1].name == "both_palms"
+    assert sum(e.is_trigger for e in events) == 1                       # once, not every frame
+    assert next(e.hold_time for e in events if e.is_trigger) >= 0.6     # and only after a clear hold
+    assert not any(e.name == "open_palm" for e in events)               # the palm alone did not act meanwhile
+
+    brief = GestureEngine(stable_frames=2)
+    flash = [brief.update(_two(PALM, PALM, 0.3), now=i * 0.05) for i in range(6)]      # 0.3 s: too short
+    assert not any(e.is_trigger for e in flash)
+
+
+def test_mixed_hands_are_two_hands_and_do_nothing():
+    engine = GestureEngine()
+    for i in range(10):
+        event = engine.update(_two(_hand(pinch=True), _hand(), 0.3), now=i * 0.05)   # one pinches, one is a fist
+        assert event.name == "two_hands" and event.is_trigger is False
+    controller, executor, _ = _controller({"pinch": "left_click", "fist": "minimize_window"})
+    assert controller.dispatch(event) is None and executor.calls == []   # the pinch did not click
+
+
+def test_two_hand_pinch_reports_hands_moving_apart_and_zooms():
+    engine = GestureEngine()
+    engine.continuous_gestures = continuous_poses({"two_hand_pinch": "zoom"})
+    controller, executor, _ = _controller({"two_hand_pinch": "zoom"}, engage_seconds=0.1)
+    controller.continuous_gestures = engine.continuous_gestures
+    labels = []
+    for i in range(12):                       # hands pinched, spreading 0.02 further apart each frame
+        event = engine.update(_two(_hand(pinch=True), _hand(pinch=True), 0.2 + 0.02 * i), now=i * 0.05)
+        result = controller.dispatch(event)
+        labels.append(result.label if result else None)
+    assert event.name == "two_hand_pinch" and event.motion_delta[0] == pytest.approx(0.02, abs=1e-4)
+    assert set(labels) == {None, "Zoom In"} and labels.count("Zoom In") >= 2
+    for i in range(12, 24):                   # and back together
+        result = controller.dispatch(engine.update(
+            _two(_hand(pinch=True), _hand(pinch=True), 0.42 - 0.02 * (i - 12)), now=i * 0.05))
+        labels.append(result.label if result else None)
+    assert "Zoom Out" in labels[12:] and "Zoom In" not in labels[13:]
+    assert all(call[0] == "hotkey" for call in executor.calls)
+
+
+def test_second_hand_is_ignored_when_resting_or_when_two_hand_gestures_are_unused():
+    resting = PALM.copy()
+    resting[:, 1] += 0.13                      # the other hand lies at the bottom edge
+    engine = GestureEngine()
+    engine.rest_edge = 0.98
+    assert engine.update(_two(PALM, resting, 0.3), now=0.0).name == "open_palm"   # one-hand control carries on
+
+    unused = GestureEngine()
+    unused.muted = {"both_palms", "two_hand_pinch"}
+    assert unused.update(_two(PALM, PALM, 0.3), now=0.0).name == "open_palm"
+
+    only_zoom = GestureEngine()
+    only_zoom.muted = {"both_palms"}           # both palms unmapped, zoom still in use
+    assert only_zoom.update(_two(PALM, PALM, 0.3), now=0.0).name == "two_hands"
+
+
+def test_leaving_two_hand_mode_does_not_jump_the_cursor_or_look_like_a_swipe():
+    engine = GestureEngine()
+    engine.update(_FakeHandResult(PALM), now=0.0)
+    for i in range(1, 6):
+        engine.update(_two(PALM, PALM, 0.3), now=i * 0.05)
+    far = PALM.copy()
+    far[:, 0] += 0.3                           # the remaining hand is now somewhere else entirely
+    event = engine.update(_FakeHandResult(far), now=0.3)
+    assert event.name == "open_palm" and event.motion_delta is None
+
+
+def test_both_palms_pause_and_resume_by_default():
+    from src.config import DEFAULT_MAPPINGS
+
+    assert DEFAULT_MAPPINGS["both_palms"] == "toggle_pause" and DEFAULT_MAPPINGS["two_hand_pinch"] == "zoom"
+    controller, _, safety = _controller(dict(DEFAULT_MAPPINGS))
+    assert controller.dispatch(_event("both_palms")).label == "Control Paused" and safety.paused
+    assert controller.dispatch(_event("both_palms")).label == "Control Resumed" and not safety.paused

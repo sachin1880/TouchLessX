@@ -70,7 +70,9 @@ gesture being recognised. You can also choose one **emergency stop gesture** in
 Settings that works in every profile, even while locked. **Stop Camera** turns tracking off entirely. **Practice mode** (Gesture Studio)
 recognises gestures without sending anything.
 
-Full instructions: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
+Everything that is implemented, in one document:
+[docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md).
+Full instructions for users: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## Setup
 
@@ -212,7 +214,9 @@ figures describe your dataset, not every lighting, camera or user.
   whatever text you copy, passwords included, so it has its own off switch.
 - Voice control is off until you switch it on. While it is on the microphone is open
   and the header shows it; audio is processed in memory on this computer and discarded.
-- Network use is limited to the one-time model downloads (hand tracking, and speech if
+- With "Check for updates at start" on (the default), the app asks GitHub once per
+  start whether a newer release exists. Switch it off under Settings.
+- Network use is otherwise limited to the one-time model downloads (hand tracking, and speech if
   you use voice) and the smart-home webhooks you configure yourself.
 
 ## Project structure
@@ -242,6 +246,7 @@ TouchlessX/
 │   ├── assistant.py          # Free requests: web, dictation, mail and answers via a local AI
 │   ├── clipboard.py          # In-memory clipboard history
 │   ├── colors.py             # Accent colour arithmetic
+│   ├── system.py             # Data folder, start at login, update check, menu-bar icon
 │   ├── action_log.py         # Text log + session statistics / suggestions
 │   ├── ui.py                 # App shell, dashboard, mini controller, pipeline thread
 │   ├── ui_pages.py           # The other pages

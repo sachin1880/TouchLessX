@@ -21,6 +21,7 @@ from .gesture_engine import CUSTOM_PREFIX
 from .training import MIN_SAMPLES_TO_TRAIN, TrainingError
 from .profiles import ProfileError
 from .smart_home import SmartHomeError
+from .system import is_packaged
 from .ui_widgets import (
     ACCENT, AMBER, BG, CATEGORIES, GREEN, PANEL_ALT, RED, TEXT, TEXT_DIM, TRACK,
     button, card, entry, gesture_glyph, gesture_label, label, option_menu, slider_row, switch, switch_row,
@@ -1436,6 +1437,33 @@ class SettingsPage(Page):
         self._log_message.pack(side="left", padx=10)
         self.end(box)
 
+        box = self.section("Startup and updates")
+        self._login = ctk.BooleanVar(value=app.login_item.is_enabled())
+        self._login.trace_add("write", lambda *_: self._system_message.configure(
+            text=app.set_start_at_login(self._login.get()), text_color=TEXT_DIM))
+        packaged = is_packaged()
+        switch_row(box, "Start TouchlessX when I log in",
+                   "Adds a per-user login entry; no administrator rights needed." + ("" if packaged else
+                   " From source on macOS the camera and microphone permissions belong to the program that "
+                   "starts it, so a login start may come up without camera access - the packaged app does "
+                   "not have this problem."), self._login)
+        if platform.system() == "Darwin":
+            self.option_switch(box, "menu_bar_icon", "Menu-bar icon",
+                               "A ✋ in the menu bar to show the window, pause, stop the camera or quit.",
+                               on_change=app.set_menu_bar)
+            self.option_switch(box, "close_to_menu_bar", "Keep running when the window is closed",
+                               "Closing the window then only hides it; use the menu-bar icon to bring it back "
+                               "or to quit. Needs the menu-bar icon.")
+        self.option_switch(box, "check_updates", "Check for updates at start",
+                           "Asks GitHub once per start whether a newer release exists. Nothing is installed "
+                           "by itself: you get a button that opens the download page.")
+        row = ctk.CTkFrame(box, fg_color="transparent")
+        row.pack(anchor="w", padx=18, pady=6)
+        button(row, "Check now", self._check_updates, "ghost", 110).pack(side="left")
+        self._system_message = label(row, self._update_text(app.update_info), 11, color=TEXT_DIM)
+        self._system_message.pack(side="left", padx=10)
+        self.end(box)
+
         box = self.section("Help")
         self.note(box, "Space / Esc pause control while TouchlessX is in front. The setup guide explains "
                        "permissions, gestures and the emergency pause.")
@@ -1450,6 +1478,19 @@ class SettingsPage(Page):
         button(box, "Reset active profile to defaults", app.reset_settings, "danger", 250).pack(
             anchor="w", padx=18, pady=8)
         self.end(box)
+
+    @staticmethod
+    def _update_text(info) -> str:
+        if not info:
+            return ""
+        return {"update": f"Version {info['latest']} is available - use the Update button in the header.",
+                "current": "You have the latest version.", "none": "No release has been published yet.",
+                "error": "Could not reach GitHub to check."}[info["status"]]
+
+    def _check_updates(self) -> None:
+        self._system_message.configure(text="Checking…")
+        message = self._system_message
+        self.app.check_updates(lambda info: message.winfo_exists() and message.configure(text=self._update_text(info)))
 
     def _set_accent(self, color: str) -> None:
         self.app.set_option("accent_color", color)

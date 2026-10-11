@@ -1,6 +1,6 @@
 [project]
 name = "touchlessx"
-version = "1.2.0"
+version = "1.3.0"
 description = "Webcam hand-gesture control for the desktop, processed locally."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
