@@ -197,6 +197,7 @@ class App(ctk.CTk):
         self.action_controller.confirm_smart_home = bool(config["confirm_smart_home"])
         self.action_controller.scroll_invert = bool(config["scroll_invert"])
         self.action_controller.scroll_style = config["scroll_style"]
+        self.action_controller.scroll_vertical_only = bool(config["scroll_vertical_only"])
         self.action_controller.apps = config["apps"]
         self.action_controller.emergency_gesture = config["emergency_gesture"]
         calibration = config["calibration"]
@@ -264,6 +265,8 @@ class App(ctk.CTk):
             self.action_controller.scroll_invert = bool(value)
         elif key == "scroll_style":
             self.action_controller.scroll_style = value
+        elif key == "scroll_vertical_only":
+            self.action_controller.scroll_vertical_only = bool(value)
         elif key == "ignore_resting_hand":
             self.gesture_engine.rest_edge = REST_EDGE if value else None
         elif key == "clipboard_history" and not value:

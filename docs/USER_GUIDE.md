@@ -92,7 +92,16 @@ Cut, Select All, Undo, Redo, Paste Previous Copy, Page Up / Down and Jump to Top
 Bottom are available as actions too; assign them in Gesture Studio. The **Clipboard**
 page shows what is mapped and keeps the last ten copied texts.
 
-**How scrolling works (Glide, the default).** When the scroll pose has been held for
+**How scrolling works (Swipe, the default).** Show the scroll pose (two fingers is the
+steadiest), then **flick your hand upward**: the page scrolls up, keeps rolling by
+itself and coasts to a stop, like flicking a page on a phone. Flick again while it is
+still moving to go further and faster. A flick downward scrolls down; a clear sideways
+flick scrolls sideways. Only quick movements count - slow movement does nothing, and
+bringing your hand back for the next flick is ignored for about a second, so the page
+never scrolls back by accident. If your hand blurs mid-flick the scroll still
+completes. To scroll up and down only, switch on **Scroll up and down only**.
+
+**Glide** (System Controls → Scroll style) is the alternative for long documents. When the scroll pose has been held for
 a moment, the spot where your hand is becomes a neutral point (drawn as a circle in
 the preview). Move your hand **above** it and the page scrolls up and **keeps
 scrolling** for as long as you hold it there; further away is faster. Bring the hand

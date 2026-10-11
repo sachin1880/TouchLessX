@@ -28,6 +28,17 @@ FOLLOW_SLACK = 0.006                    # tracking jitter below this moves nothi
 FOLLOW_PIXELS_PER_FRAME_HEIGHT = 3000.0
 PIXELS_PER_WHEEL_CLICK = 40.0           # for systems that only take whole wheel clicks
 MINIMIZE_MIN_INTERVAL = 2.0             # seconds between two minimise actions
+# Swipe ("flick") scrolling. Thresholds come from recorded real use: deliberate swipes
+# peaked at 0.8-2.0 frame heights per second, while steering the cursor stayed under 0.5.
+FLICK_SPEED = 0.7                       # peak speed a movement must reach to count as a swipe
+FLICK_RUN_SPEED = 0.45                  # ...measured over the part of it faster than this
+FLICK_MIN_TRAVEL = 0.06                 # ...which must cover at least this much of the frame
+FLICK_PIXELS_PER_SPEED = 1900.0         # starting scroll speed (px/s) per frame-height/s of swipe
+FLICK_FRICTION_SECONDS = 0.4            # the coasting scroll loses ~63% of its speed in this time
+FLICK_RETURN_SECONDS = 1.1              # after a swipe, the opposite direction is the hand coming back
+# A fast-moving hand blurs, and the pose is briefly lost ("unknown"). Scrolling carries
+# on through such frames for up to this long instead of breaking off.
+SCROLL_STICKY_SECONDS = 1.0
 SHORTCUT_PREFIX = "shortcut:"
 APP_PREFIX = "app:"
 
@@ -572,7 +583,12 @@ class ActionController:
         self._volume_remainder = 0.0
         self.scroll_invert = False
         self.scroll_style = scroll_style
+        self.scroll_vertical_only = False
         self._scroll_time = -1e9
+        self._sticky_since: float | None = None
+        self._momentum: dict | None = None      # the coasting scroll after a swipe
+        self._flick_run: dict | None = None     # the fast movement currently in progress
+        self._flick_return = (0, 0, -1e9)       # (axis, direction, until): the hand's way back
         self._reset_scroll()
         self.executor = executor
         self.safety = safety
@@ -625,6 +641,11 @@ class ActionController:
         safety = self.safety
         if self._dragging and (action != "left_click" or safety.paused or safety.locked):
             self.release()
+        if self._momentum is not None:
+            if safety.paused or safety.locked:
+                self._momentum = None
+            else:
+                self._coast(self._clock())  # the scroll set off by a swipe keeps rolling on its own
 
         confident = self._confident(event)
         held = event.name in self.continuous_gestures
@@ -648,6 +669,8 @@ class ActionController:
                 safety.set_locked(False)
                 return DispatchResult("Controls Unlocked", "")
             return None
+        if self._scroll_continues_through(event, action):
+            return self._scroll(event, sticky=True)
         if not event.is_trigger:
             return self._drag(event) if action == "left_click" else None
 
@@ -784,9 +807,27 @@ class ActionController:
             if self._smoothed_xy is not None:  # keep the cursor at the same relative spot
                 self._smoothed_xy = (self._smoothed_xy[0] * scale_x, self._smoothed_xy[1] * scale_y)
 
+    def _scroll_continues_through(self, event: GestureEvent, action: str) -> bool:
+        """True for a frame in which the scroll pose was lost only because the hand is
+        moving too fast to read - scrolling should carry on rather than break off."""
+        if event.name != "unknown":
+            self._sticky_since = None  # a readable pose again: the allowance starts afresh next time
+            return False
+        now = self._clock()
+        if (
+            action != "none" or event.motion_delta is None
+            or now - self._scroll_time > 0.4 or not self.is_enabled("mouse_control")
+        ):
+            return False
+        if self._sticky_since is None:
+            self._sticky_since = now
+        # Once the allowance is used up it stays used up until the pose is seen again.
+        return now - self._sticky_since <= SCROLL_STICKY_SECONDS
+
     def release(self) -> None:
         """Lets go of a held drag - called when the pinch ends, control is paused, or
         the app shuts down, so the mouse button is never left stuck down."""
+        self._momentum = None
         if self._dragging:
             self._dragging = False
             self.executor.mouse_up()
@@ -866,19 +907,23 @@ class ActionController:
         self._scroll_axis_time = 0.0
         self._scroll_remainder = 0.0
 
-    def _scroll(self, event: GestureEvent) -> DispatchResult | None:
-        """Scrolls with the hand, vertically or horizontally, in one of two styles.
+    def _scroll(self, event: GestureEvent, sticky: bool = False) -> DispatchResult | None:
+        """Scrolls with the hand, vertically or horizontally, in one of three styles.
+
+        "flick": a quick swipe sets the page rolling and it coasts to a stop, like on a
+        phone; swipe again to keep going. Slow movement does nothing, so the hand can
+        come back for the next swipe without scrolling back.
 
         "glide": where the hand was when the pose engaged becomes a neutral point. Hold
         the hand above it and the page keeps scrolling up, further away = faster; back
-        to the middle = stop. There is no return stroke, so nothing scrolls back.
+        to the middle = stop.
 
         "follow": the page moves with the hand like a touch screen. Simple, but bringing
         the hand back for another stroke scrolls back too.
         """
         now = self._clock()
         gap = now - self._scroll_time
-        if event.motion_delta is None or event.hold_time < self.engage_seconds:
+        if event.motion_delta is None or (event.hold_time < self.engage_seconds and not sticky):
             self._reset_scroll()
             self._scroll_time = now
             return None
@@ -886,6 +931,11 @@ class ActionController:
             self._reset_scroll()  # the pose was away for a moment: start from a fresh neutral point
         self._scroll_time = now
         dt = min(0.1, gap) if 0 < gap <= 0.5 else 1 / 30
+        if self.scroll_vertical_only:
+            event = GestureEvent(event.name, event.confidence, event.index_tip, (0.0, event.motion_delta[1]),
+                                 event.is_trigger, event.hold_time, event.palm)
+        if self.scroll_style == "flick":
+            return self._flick_scroll(event.motion_delta, dt, now)
 
         offset = self._scroll_offset
         offset[0] += event.motion_delta[0]
@@ -908,6 +958,58 @@ class ActionController:
         if axis == 1:
             return DispatchResult("Scroll Up" if pixels > 0 else "Scroll Down", "mouse_control")
         return DispatchResult("Scroll Right" if pixels > 0 else "Scroll Left", "mouse_control")
+
+    def _flick_scroll(self, delta: tuple[float, float], dt: float, now: float) -> DispatchResult | None:
+        """Swipe detection: a movement that is fast enough, for far enough, starts (or
+        tops up) a coasting scroll in its direction."""
+        vx, vy = delta[0] / dt, delta[1] / dt
+        axis = 1 if abs(vy) >= abs(vx) else 0
+        speed, other = (vx, vy)[axis], (vx, vy)[1 - axis]
+        # Sideways scrolling has to be clearly sideways: a slanted vertical swipe is far more common.
+        if abs(speed) < FLICK_RUN_SPEED or abs(speed) < (1.3 if axis == 1 else 1.8) * abs(other):
+            self._flick_run = None
+            return None
+        sign = 1 if speed > 0 else -1
+        run = self._flick_run
+        if run is None or (run["axis"], run["sign"]) != (axis, sign):
+            run = self._flick_run = {"axis": axis, "sign": sign, "travel": 0.0, "peak": 0.0, "fired": False}
+        run["travel"] += abs(delta[axis])
+        run["peak"] = max(run["peak"], abs(speed))
+        if run["fired"] or run["peak"] < FLICK_SPEED or run["travel"] < FLICK_MIN_TRAVEL:
+            return None
+        run["fired"] = True  # one swipe, one push - however long the movement goes on
+
+        back_axis, back_sign, until = self._flick_return
+        if now < until and axis == back_axis and sign == back_sign:
+            return None  # this is the hand returning from the swipe just made, not a new one
+        self._flick_return = (axis, -sign, now + FLICK_RETURN_SECONDS)
+
+        # +x = right, +y = up. Hand up means a negative camera y, hence the flip.
+        direction = (sign if axis == 0 else -sign) * (-1 if self.scroll_invert else 1)
+        push = min(6500.0, max(700.0, FLICK_PIXELS_PER_SPEED * run["peak"])) * self.scroll_speed
+        momentum = self._momentum
+        if momentum is not None and momentum["axis"] == axis and momentum["velocity"] * direction > 0:
+            # Swiping again while it is still rolling adds to it.
+            momentum["velocity"] = direction * min(9000.0, max(abs(momentum["velocity"]), push) + 0.4 * push)
+        else:
+            self._momentum = {"axis": axis, "velocity": direction * push, "time": now, "remainder": 0.0}
+        if axis == 1:
+            return DispatchResult("Scroll Up" if direction > 0 else "Scroll Down", "mouse_control")
+        return DispatchResult("Scroll Right" if direction > 0 else "Scroll Left", "mouse_control")
+
+    def _coast(self, now: float) -> None:
+        """Advances the coasting scroll by the time passed and slows it down."""
+        momentum = self._momentum
+        dt = min(0.1, max(0.0, now - momentum["time"]))
+        momentum["time"] = now
+        momentum["remainder"] += momentum["velocity"] * dt
+        pixels = int(momentum["remainder"])
+        if pixels:
+            momentum["remainder"] -= pixels
+            self.executor.scroll_pixels(pixels if momentum["axis"] == 0 else 0, pixels if momentum["axis"] == 1 else 0)
+        momentum["velocity"] *= math.exp(-dt / FLICK_FRICTION_SECONDS)
+        if abs(momentum["velocity"]) < 60.0:
+            self._momentum = None
 
     def scroll_guide(self, event: GestureEvent) -> tuple[float, float, float, bool] | None:
         """For the preview: (centre x, centre y, radius, scrolling?) of the glide style's

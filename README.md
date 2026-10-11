@@ -42,9 +42,11 @@ What keeps it from misfiring:
 - The cursor follows the palm through a speed-adaptive filter: steady when the hand
   rests, immediate when it moves.
 - Only fast flicks count as swipes; ordinary cursor movement does not.
-- Scrolling "glides": the hand's distance from a neutral point sets the speed, so there
-  is no return stroke to scroll the page back, and it stays on one axis until the hand
-  returns to the middle. Output is in pixels, not whole lines, so it moves smoothly.
+- Scrolling is by swipe: a quick flick of the hand sets the page rolling and it coasts
+  to a stop; slow movement, and the hand coming back for the next flick, do nothing.
+  Scrolling carries on through frames where a fast hand blurs and the pose is lost.
+  "Glide" (distance from a neutral point sets the speed) and "Follow" are alternatives.
+  Output is in pixels, not whole lines, so it moves smoothly.
 - Detections under the confidence threshold are ignored.
 - A **resting hand is ignored**: when the wrist is at the bottom edge of the picture or
   below it (a hand on the desk or keyboard, half out of view) nothing is recognised.
@@ -191,7 +193,7 @@ TouchlessX/
 │   ├── ui.py                 # App shell, dashboard, mini controller, pipeline thread
 │   ├── ui_pages.py           # The other pages
 │   └── ui_widgets.py         # Light/dark palette and widget helpers
-└── tests/                    # 117 tests; no camera, display, network or real input needed
+└── tests/                    # 126 tests; no camera, display, network or real input needed
 ```
 
 ## Running the tests

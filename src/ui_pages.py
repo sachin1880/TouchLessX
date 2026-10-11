@@ -282,15 +282,19 @@ class SystemControlsPage(Page):
         text = ctk.CTkFrame(row, fg_color="transparent")
         text.pack(side="left")
         label(text, "Scroll style", 13, True).pack(anchor="w")
-        label(text, "Glide: hold your hand above or below where it started and the page keeps scrolling - further "
-                    "= faster,\nback to the middle = stop. Follow: the page moves with your hand, like a touch "
-                    "screen.", 11, color=TEXT_DIM, justify="left").pack(anchor="w")
-        styles = {"Glide (recommended)": "glide", "Follow my hand": "follow"}
-        current = next((k for k, v in styles.items() if v == app.config_data["scroll_style"]), "Glide (recommended)")
+        label(text, "Swipe: flick your hand up or down and the page rolls on and coasts to a stop, like on a "
+                    "phone;\nslow movement does nothing. Glide: hold your hand above or below where it "
+                    "started - further = faster.\nFollow: the page moves with your hand, like a touch screen.",
+              11, color=TEXT_DIM, justify="left").pack(anchor="w")
+        styles = {"Swipe (flick and coast)": "flick", "Glide (hold to scroll)": "glide", "Follow my hand": "follow"}
+        current = next((k for k, v in styles.items() if v == app.config_data["scroll_style"]),
+                       "Swipe (flick and coast)")
         option_menu(row, list(styles), current,
                     lambda chosen: app.set_option("scroll_style", styles[chosen]), 190).pack(side="right")
         self.sensitivity_slider(box, "scroll_speed", "Scroll speed",
                                 "Multiplier for the scroll gesture.", 0.25, 3.0, "{:.2f}x")
+        self.option_switch(box, "scroll_vertical_only", "Scroll up and down only",
+                           "Ignores sideways movement, so a slanted swipe can't scroll the page sideways.")
         self.option_switch(box, "scroll_invert", "Reverse scroll direction",
                            "By default the page scrolls the way your hand moves: hand up scrolls up, hand "
                            "right scrolls right. Switch on if it feels backwards.")

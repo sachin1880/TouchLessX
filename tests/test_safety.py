@@ -647,3 +647,127 @@ def test_one_fist_minimises_one_window_even_if_the_pose_wavers():
     clock.now += 2.5
     assert controller.dispatch(_event("fist")).label == "Minimize Window"
     assert executor.calls == [("minimize",), ("minimize",)]
+
+
+# ------------------------------------------------------------ swipe scrolling
+def _swiper(**kwargs):
+    controller, executor, clock, _ = _scroller("flick", **kwargs)
+
+    def frames(pose, count, dy=0.0, dx=0.0, hold=1.0):
+        labels = []
+        for _ in range(count):
+            clock.now += 1 / 30
+            result = controller.dispatch(_event(pose, delta=(dx, dy), hold=hold))
+            labels.append(result.label if result else None)
+        return [label for label in labels if label]
+
+    scrolled = lambda: (sum(c[1] for c in executor.calls if c[0] == "scroll"),
+                        sum(c[1] for c in executor.calls if c[0] == "hscroll"))
+    return controller, executor, clock, frames, scrolled
+
+
+def test_a_quick_swipe_sets_the_page_rolling_and_it_coasts_to_a_stop():
+    controller, executor, _, frames, scrolled = _swiper()
+    assert frames("open_palm", 6, dy=-0.04) == ["Scroll Up"]   # 1.2 frame heights/s upward: one swipe
+    during = scrolled()[0]
+    frames("open_palm", 60)                                     # hand now still: the page keeps rolling...
+    after = scrolled()[0]
+    assert after > during and 500 < after < 1500                # ...roughly a screenful in all
+    assert controller._momentum is None                         # ...and has come to rest
+    executor.calls.clear()
+    frames("open_palm", 30)
+    assert executor.calls == []
+
+
+def test_slow_movement_and_the_hand_coming_back_scroll_nothing():
+    _, executor, _, frames, scrolled = _swiper()
+    assert frames("open_palm", 30, dy=-0.008) == [] and executor.calls == []   # 0.24/s: far too slow
+    assert frames("open_palm", 6, dy=-0.04) == ["Scroll Up"]
+    assert frames("open_palm", 6, dy=0.04) == []        # the same hand coming straight back, just as fast
+    frames("open_palm", 60)
+    assert scrolled()[0] > 0 and all(c[1] > 0 for c in executor.calls)   # nothing ever went downward
+    assert frames("open_palm", 6, dy=0.04) == ["Scroll Down"]            # later, a real swipe down counts
+
+
+def test_repeated_swipes_keep_it_going_and_add_speed():
+    def distance(swipes):
+        _, _, _, frames, scrolled = _swiper()
+        for _ in range(swipes):
+            frames("open_palm", 6, dy=-0.04)     # swipe up
+            frames("open_palm", 9, dy=0.026)     # hand comes back, a little slower
+        frames("open_palm", 90)
+        return scrolled()[0]
+
+    one, three = distance(1), distance(3)
+    assert three > 2.2 * one
+
+
+def test_swipe_scrolling_survives_the_pose_blurring_mid_swipe():
+    """Recorded use: most fast swipes were classified "unknown" part of the way through."""
+    _, _, _, frames, scrolled = _swiper()
+    frames("open_palm", 4)                                           # the pose, held
+    assert frames("open_palm", 1, dy=-0.04) == []
+    assert frames("unknown", 5, dy=-0.04, hold=0.0) == ["Scroll Up"]  # blurred for the rest of the swipe
+    assert scrolled()[0] > 0
+
+    _, executor, clock, frames, _ = _swiper()                        # but "unknown" alone never scrolls
+    assert frames("unknown", 10, dy=-0.04, hold=0.0) == [] and executor.calls == []
+    frames("open_palm", 3)
+    clock.now += 2.0                                                 # ...nor long after the pose was last seen
+    assert frames("unknown", 10, dy=-0.04, hold=0.0) == []
+
+
+def test_sticky_scrolling_gives_up_when_the_pose_stays_lost():
+    controller, _, _, frames, _ = _swiper()
+    frames("open_palm", 4)
+    frames("unknown", 45, dy=-0.001, hold=0.0)     # 1.5 s of unreadable hand
+    controller._momentum = None
+    assert frames("unknown", 6, dy=-0.04, hold=0.0) == []
+
+
+def test_sideways_swipes_scroll_sideways_unless_switched_off():
+    _, _, _, frames, scrolled = _swiper()
+    assert frames("open_palm", 6, dx=0.04) == ["Scroll Right"]
+    frames("open_palm", 40)
+    assert scrolled()[1] > 300 and scrolled()[0] == 0
+
+    _, _, _, frames, scrolled = _swiper()
+    assert frames("open_palm", 6, dy=-0.04, dx=0.03) == ["Scroll Up"]   # slanted: still vertical
+    frames("open_palm", 40)
+    assert scrolled()[1] == 0
+
+    controller, _, _, frames, scrolled = _swiper()
+    controller.scroll_vertical_only = True
+    assert frames("open_palm", 6, dx=0.04) == []
+    frames("open_palm", 40)
+    assert scrolled() == (0, 0)
+
+
+def test_coasting_stops_at_once_on_pause_lock_and_emergency_stop():
+    for stop in ("pause", "lock", "release"):
+        controller, executor, _, frames, _ = _swiper()
+        frames("open_palm", 6, dy=-0.04)
+        if stop == "pause":
+            controller.safety.set_paused(True)
+        elif stop == "lock":
+            controller.safety.set_locked(True)
+        else:
+            controller.release()
+        executor.calls.clear()
+        frames("open_palm", 20)
+        frames("none", 10)
+        assert executor.calls == [] and controller._momentum is None, stop
+
+
+def test_coasting_continues_after_the_hand_leaves():
+    _, executor, _, frames, scrolled = _swiper()
+    frames("open_palm", 6, dy=-0.04)
+    before = scrolled()[0]
+    frames("none", 30)                      # hand dropped out of view right after the swipe
+    assert scrolled()[0] > before
+
+
+def test_swipe_direction_can_be_reversed():
+    controller, _, _, frames, _ = _swiper()
+    controller.scroll_invert = True
+    assert frames("open_palm", 6, dy=-0.04) == ["Scroll Down"]
