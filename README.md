@@ -122,6 +122,7 @@ tracks for a few seconds and prints the measured frame rate. It sends no input.
 | **Media & Presentation** | Media / volume / slide switches, arrow vs. Page Up/Down slide keys, test buttons, compatibility notes. |
 | **Smart Home** | Optional. Webhooks from a hub (Home Assistant, Node-RED, IFTTT, …) mapped to gestures, with thumbs-up confirmation. Off by default. |
 | **AI Insights** | Usage from the local history, recognition quality, rule-based suggestions, clear-history, model training history. |
+| **Voice** | Optional spoken commands after a wake word ("computer, scroll down slowly", "computer, change the tab", "computer, open google chrome"). Recognised offline on this computer. |
 | **Clipboard** | Which gesture does copy / cut / paste / delete / select all / undo / redo, and an in-memory history of the last ten copied texts that can be put back or pasted by gesture. |
 | **Profiles** | Create, rename, duplicate, switch, import and export profiles. |
 | **Settings** | Dark / light theme, accent colour (eight presets or any colour you pick), mini controller, camera and resolution, mirror preview, controlling hand (left / right / either), emergency stop gesture, privacy and data retention, setup guide, versions. |
@@ -136,6 +137,52 @@ Keyboard shortcuts are built from an approved key list (modifiers plus one key),
 started without arguments. A gesture can never run a command or script. Imported
 profiles are validated, and cannot bring shortcuts, applications or smart-home targets
 with them.
+
+### Voice commands
+
+Speech is recognised on this computer by [Vosk](https://alphacephei.com/vosk/) with a
+small English model (about 40 MB, downloaded once when voice is first switched on); no
+audio or text is sent anywhere. Only phrases that start with the wake word count.
+Recognition is limited to the words commands are made of plus the names of installed
+applications, and the parser maps what it hears onto the app's existing actions:
+scrolling (one push, "a little", "fast", "slowly" / "keep" until "stop"), tabs,
+switching and opening applications, clicks, copy / paste / undo, media, slides, and
+stop / resume. It is a command set with natural variations, not a free-form assistant,
+and it cannot run command lines or open files. Voice obeys the emergency stop, the
+feature switches and Practice mode like gestures do, and works with the camera off.
+
+Checked against synthesized speech in a US and an Indian English voice (61 of 62
+commands understood); a real microphone in a real room will do worse, and that has not
+been measured.
+
+### Assistant (free requests)
+
+With **Understand free requests** on (Voice page), a phrase addressed to the app that
+is more than a fixed command is transcribed by an open-vocabulary recogniser (Whisper
+"base", about 150 MB, on this computer) and worked out:
+
+- "open YouTube and search for <song>", "play <song> on YouTube", "open Gmail",
+  "search Google for <anything>", "open <site> dot com" open the right address in your
+  browser. Web sites need not be installed; an installed application of the same name
+  is preferred.
+- "type <words>" pastes exactly what you said where the cursor is.
+- "write a mail about <topic>" (optionally "to <person>"), "write a paragraph about
+  ...", and questions go to a language model running locally through
+  [Ollama](https://ollama.com) (`llama3.2:3b`, about 2 GB). A mail is opened as a
+  **draft** in Gmail or your mail app for you to check and send; other writing is
+  pasted at the cursor; answers are shown and read aloud.
+
+Set-up for the AI part: `brew install ollama`, then `ollama pull llama3.2:3b`. The app
+starts the Ollama service itself when it is first needed.
+
+What it is not: it cannot browse the web, see the screen, click through a site for
+you, or send anything by itself, and a small local model writes plainly and can get
+facts wrong. Speech without the wake word is never transcribed. The language model
+only ever returns text; nothing it writes is executed.
+
+Checked with synthesized speech (14 of 14 free requests turned into the right kind of
+task, in two voices); song titles and other unusual names are often misspelt by the
+recogniser, and real-room accuracy has not been measured.
 
 ### Custom gestures
 
@@ -163,8 +210,10 @@ figures describe your dataset, not every lighting, camera or user.
   Clear button; coordinates only.
 - Clipboard history is held in memory only and is never written to disk. It contains
   whatever text you copy, passwords included, so it has its own off switch.
-- Network use is limited to the one-time model download and the smart-home webhooks
-  you configure yourself.
+- Voice control is off until you switch it on. While it is on the microphone is open
+  and the header shows it; audio is processed in memory on this computer and discarded.
+- Network use is limited to the one-time model downloads (hand tracking, and speech if
+  you use voice) and the smart-home webhooks you configure yourself.
 
 ## Project structure
 
@@ -189,11 +238,15 @@ TouchlessX/
 │   ├── profiles.py           # Profile store, presets, import validation
 │   ├── history.py            # SQLite action history
 │   ├── smart_home.py         # Optional webhooks
+│   ├── voice.py              # Offline speech recognition, wake word, command parser
+│   ├── assistant.py          # Free requests: web, dictation, mail and answers via a local AI
+│   ├── clipboard.py          # In-memory clipboard history
+│   ├── colors.py             # Accent colour arithmetic
 │   ├── action_log.py         # Text log + session statistics / suggestions
 │   ├── ui.py                 # App shell, dashboard, mini controller, pipeline thread
 │   ├── ui_pages.py           # The other pages
 │   └── ui_widgets.py         # Light/dark palette and widget helpers
-└── tests/                    # 126 tests; no camera, display, network or real input needed
+└── tests/                    # 252 tests; no camera, display, network or real input needed
 ```
 
 ## Running the tests

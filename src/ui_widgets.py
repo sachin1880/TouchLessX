@@ -69,6 +69,7 @@ GESTURE_INFO = {
     "point_right": ("Point Right", "👉"),
     "unknown": ("Unknown", "?"),
     "none": ("No Hand", "–"),
+    "voice": ("Voice", "🎙"),
     "resting": ("Resting - raise your hand", "⤓"),
 }
 

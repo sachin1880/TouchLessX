@@ -12,6 +12,9 @@ dependencies = [
     "customtkinter>=5.2,<6",
     "pillow>=10.0,<11",
     "scikit-learn>=1.4,<2",
+    "vosk>=0.3.44,<0.4",
+    "sounddevice>=0.4",
+    "faster-whisper>=1.0,<2",
     "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
 ]
 

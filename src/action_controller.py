@@ -39,6 +39,7 @@ FLICK_RETURN_SECONDS = 1.1              # after a swipe, the opposite direction 
 # A fast-moving hand blurs, and the pose is briefly lost ("unknown"). Scrolling carries
 # on through such frames for up to this long instead of breaking off.
 SCROLL_STICKY_SECONDS = 1.0
+VOICE_SCROLL_MAX_SECONDS = 90.0         # a steady voice scroll never runs longer than this unattended
 SHORTCUT_PREFIX = "shortcut:"
 APP_PREFIX = "app:"
 
@@ -457,6 +458,16 @@ ACTIONS: dict[str, ActionSpec] = {
     "page_down": ActionSpec("Page Down", "mouse_control", "discrete"),
     "scroll_top": ActionSpec("Jump to Top", "mouse_control", "discrete"),
     "scroll_bottom": ActionSpec("Jump to Bottom", "mouse_control", "discrete"),
+    "next_tab": ActionSpec("Next Tab", "", "discrete"),
+    "prev_tab": ActionSpec("Previous Tab", "", "discrete"),
+    "new_tab": ActionSpec("New Tab", "", "discrete"),
+    "close_tab": ActionSpec("Close Tab / Window", "", "discrete"),
+    "switch_app": ActionSpec("Switch Application", "", "discrete"),
+    "go_back": ActionSpec("Go Back", "", "discrete"),
+    "go_forward": ActionSpec("Go Forward", "", "discrete"),
+    "reload": ActionSpec("Reload Page", "", "discrete"),
+    "zoom_in": ActionSpec("Zoom In", "", "discrete"),
+    "zoom_out": ActionSpec("Zoom Out", "", "discrete"),
     "minimize_window": ActionSpec("Minimize Window", "", "discrete"),
     "restore_window": ActionSpec("Restore Window", "", "discrete"),
 }
@@ -472,7 +483,17 @@ _KEY_ACTIONS = {
 # Editing shortcuts; "mod" becomes Command on macOS and Ctrl elsewhere.
 _EDIT_KEYS = {
     "copy": ["mod", "c"], "cut": ["mod", "x"], "paste": ["mod", "v"], "select_all": ["mod", "a"],
-    "undo": ["mod", "z"],
+    "undo": ["mod", "z"], "new_tab": ["mod", "t"], "close_tab": ["mod", "w"], "reload": ["mod", "r"],
+    "zoom_in": ["mod", "="], "zoom_out": ["mod", "-"],
+    "next_tab": ["ctrl", "tab"], "prev_tab": ["ctrl", "shift", "tab"],  # Ctrl on every system, macOS included
+}
+_PLATFORM_KEYS = {  # action -> (macOS, elsewhere)
+    "redo": (["command", "shift", "z"], ["ctrl", "y"]),
+    "scroll_top": (["command", "up"], ["ctrl", "home"]),
+    "scroll_bottom": (["command", "down"], ["ctrl", "end"]),
+    "switch_app": (["command", "tab"], ["alt", "tab"]),
+    "go_back": (["command", "["], ["alt", "left"]),
+    "go_forward": (["command", "]"], ["alt", "right"]),
 }
 _PLAIN_KEYS = {"delete": "backspace", "page_up": "pageup", "page_down": "pagedown"}
 
@@ -480,13 +501,9 @@ _PLAIN_KEYS = {"delete": "backspace", "page_up": "pageup", "page_down": "pagedow
 def edit_keys(action: str) -> list[str]:
     """The key combination for an editing/navigation action on this operating system."""
     mac = platform.system() == "Darwin"
+    if action in _PLATFORM_KEYS:
+        return list(_PLATFORM_KEYS[action][0 if mac else 1])
     mod = "command" if mac else "ctrl"
-    if action == "redo":
-        return [mod, "shift", "z"] if mac else [mod, "y"]
-    if action == "scroll_top":
-        return [mod, "up"] if mac else [mod, "home"]
-    if action == "scroll_bottom":
-        return [mod, "down"] if mac else [mod, "end"]
     return [mod if key == "mod" else key for key in _EDIT_KEYS[action]]
 
 
@@ -724,7 +741,7 @@ class ActionController:
             self.executor.hotkey(parse_shortcut(keys))  # re-validated: the config file is editable
         elif action in _PLAIN_KEYS:
             self.executor.press_key(_PLAIN_KEYS[action])
-        elif action in _EDIT_KEYS or action in ("redo", "scroll_top", "scroll_bottom"):
+        elif action in _EDIT_KEYS or action in _PLATFORM_KEYS:
             self.executor.hotkey(edit_keys(action))
         elif action == "paste_previous":
             # Needs the clipboard, which belongs to the UI thread: the app does the swap and the paste.
@@ -997,11 +1014,54 @@ class ActionController:
             return DispatchResult("Scroll Up" if direction > 0 else "Scroll Down", "mouse_control")
         return DispatchResult("Scroll Right" if direction > 0 else "Scroll Left", "mouse_control")
 
+    def tick(self) -> None:
+        """Keeps a rolling scroll going when no camera frames are arriving to drive it
+        (voice commands work with the camera off). Called by the UI's own timer."""
+        if self._momentum is None:
+            return
+        if self.safety.paused:
+            self._momentum = None
+        else:
+            self._coast(self._clock())
+
+    def stop_scrolling(self) -> bool:
+        rolling = self._momentum is not None
+        self._momentum = None
+        return rolling
+
+    def voice_scroll(self, direction: str, speed: str = "") -> DispatchResult | None:
+        """Scrolling asked for by voice. Plain "scroll down" gives one push that coasts
+        to a stop (about a screenful); "slowly" or "keep" scrolls steadily until told to
+        stop; "a little" / "fast" change the size of the push."""
+        if not self.is_enabled("mouse_control") or direction not in ("up", "down", "left", "right"):
+            return None
+        axis = 1 if direction in ("up", "down") else 0
+        sign = 1 if direction in ("up", "right") else -1
+        steady = {"slow": 220.0, "keep": 650.0}.get(speed)
+        now = self._clock()
+        if steady is not None:
+            self._momentum = {"axis": axis, "velocity": sign * steady * self.scroll_speed, "time": now,
+                              "remainder": 0.0, "until": now + VOICE_SCROLL_MAX_SECONDS}
+        else:
+            push = {"small": 800.0, "fast": 5200.0}.get(speed, 2300.0) * self.scroll_speed
+            self._momentum = {"axis": axis, "velocity": sign * push, "time": now, "remainder": 0.0}
+        return DispatchResult("Scroll " + direction.capitalize(), "mouse_control")
+
     def _coast(self, now: float) -> None:
         """Advances the coasting scroll by the time passed and slows it down."""
         momentum = self._momentum
         dt = min(0.1, max(0.0, now - momentum["time"]))
         momentum["time"] = now
+        if "until" in momentum:  # a steady scroll: constant speed until its time is up
+            momentum["remainder"] += momentum["velocity"] * dt
+            pixels = int(momentum["remainder"])
+            if pixels:
+                momentum["remainder"] -= pixels
+                self.executor.scroll_pixels(pixels if momentum["axis"] == 0 else 0,
+                                            pixels if momentum["axis"] == 1 else 0)
+            if now >= momentum["until"]:
+                self._momentum = None
+            return
         momentum["remainder"] += momentum["velocity"] * dt
         pixels = int(momentum["remainder"])
         if pixels:

@@ -68,6 +68,17 @@ OS version, hardware, camera and Python version with the results.
 - [ ] Restart: the model is still active. "Use this" on an older version reverts.
 - [ ] `data/` contains CSV, model files and the history only - no images.
 
+## Voice
+- [ ] Switching voice on downloads the model once, asks for the microphone, and the
+      header shows Listening; switching it off closes the microphone.
+- [ ] Microphone denied: header shows "No sound"; the app stays usable.
+- [ ] Each command group on the Voice page, spoken at normal volume from the usual
+      sitting position: record how many of 10 attempts are taken.
+- [ ] Speech without the wake word, and a video or music playing nearby, for 5
+      minutes: count actions taken (expected: none).
+- [ ] "Scroll slowly" keeps going until "stop"; emergency stop halts it at once.
+- [ ] Voice works with the camera stopped, respects feature switches and practice mode.
+
 ## Applications and shortcuts
 - [ ] Add an application, map it, open it by gesture.
 - [ ] A non-application file cannot be chosen.

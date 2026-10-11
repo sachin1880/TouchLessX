@@ -986,6 +986,144 @@ class TrainingStudioPage(Page):
         self.rebuild()
 
 
+class VoicePage(Page):
+    title = "Voice"
+    subtitle = "Speak commands. Recognised on this computer - no audio or text is sent anywhere."
+
+    EXAMPLES = (
+        ("Scrolling", "scroll down  ·  scroll up a little  ·  scroll down fast  ·  scroll this page slowly  ·  "
+                      "keep scrolling down  ·  stop  ·  go to top  ·  go to bottom  ·  page down"),
+        ("Tabs and windows", "change the tab  ·  next tab  ·  previous tab  ·  new tab  ·  close tab  ·  "
+                             "switch app  ·  minimize  ·  restore  ·  go back  ·  go forward  ·  reload"),
+        ("Applications", "open google chrome  ·  open safari  ·  open notes  ·  open <any installed application>"),
+        ("Mouse and text", "click  ·  double click  ·  right click  ·  copy  ·  paste  ·  cut  ·  select all  ·  "
+                           "undo  ·  redo  ·  delete  ·  zoom in  ·  zoom out"),
+        ("Media and slides", "play  ·  pause  ·  next song  ·  previous song  ·  volume up  ·  volume down  ·  "
+                             "mute  ·  next slide  ·  previous slide"),
+        ("Control", "stop everything  ·  resume  ·  lock  ·  unlock"),
+    )
+
+    def build(self) -> None:
+        app = self.app
+        box = self.section(
+            "Voice control",
+            "Say the wake word, then a command - in one breath (\"computer, scroll down\") or as two phrases "
+            "(\"computer\" … \"open google chrome\"). Speech without the wake word is ignored. It understands "
+            "the commands below and natural variations of them; it is not a free-form assistant.",
+        )
+        self.option_switch(box, "voice_enabled", "Listen for voice commands",
+                           "Turns the microphone on. The first time, the speech model (about 40 MB) is "
+                           "downloaded and the system asks for microphone access.", on_change=app.set_voice)
+        row = ctk.CTkFrame(box, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=7)
+        label(row, "Wake word", 13, True).pack(side="left")
+        from .voice import WAKE_WORDS
+        option_menu(row, list(WAKE_WORDS), app.config_data["voice_wake_word"],
+                    lambda chosen: app.set_option("voice_wake_word", chosen), 170).pack(side="right")
+        live = ctk.CTkFrame(box, fg_color=PANEL_ALT, corner_radius=10)
+        live.pack(fill="x", padx=18, pady=6)
+        self._state = label(live, "", 13, True)
+        self._state.pack(anchor="w", padx=12, pady=(10, 0))
+        self._heard = label(live, "", 12, color=TEXT_DIM, justify="left", wraplength=740)
+        self._heard.pack(anchor="w", padx=12)
+        self._result = label(live, "", 12, justify="left", wraplength=740)
+        self._result.pack(anchor="w", padx=12, pady=(0, 10))
+        self.end(box)
+
+        box = self.section(
+            "Assistant",
+            "For requests that are more than a fixed command, your words are transcribed and worked out on "
+            "this computer. Writing and questions use a language model running locally (Ollama) - slower than "
+            "an online assistant, and its facts can be wrong, so read what it writes. It cannot browse the web, "
+            "see your screen, or send anything: mails are opened as drafts for you to check and send.",
+        )
+        self.option_switch(box, "assistant_enabled", "Understand free requests",
+                           "Off = only the fixed commands below. On = also \"open YouTube and search …\", "
+                           "\"write a mail about …\", questions. Needs a speech model of about 150 MB.")
+        self._ai = self.note(box, "")
+        for title, phrases in (
+            ("Web", "open youtube  ·  open gmail  ·  open youtube and search for <song>  ·  play <song> on youtube  ·  "
+                    "search google for <anything>  ·  open <site> dot com"),
+            ("Writing", "write a mail about <topic>  ·  write an email to <person> about <topic>  ·  "
+                        "write a paragraph about <topic>  ·  type <exactly these words>"),
+            ("Questions", "what is …  ·  how do I …  ·  explain …  ·  translate … (answered from the model's "
+                          "own knowledge, shown here and spoken)"),
+        ):
+            label(box, title, 12, True).pack(anchor="w", padx=18, pady=(6, 0))
+            self.note(box, phrases)
+        targets = {"Gmail in the browser": "gmail", "Default mail app": "mail"}
+        row = ctk.CTkFrame(box, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=7)
+        label(row, "Open mail drafts in", 13, True).pack(side="left")
+        option_menu(row, list(targets), next((k for k, v in targets.items() if v == app.config_data["email_target"]),
+                                              "Gmail in the browser"),
+                    lambda chosen: app.set_option("email_target", targets[chosen]), 190).pack(side="right")
+        row = ctk.CTkFrame(box, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=7)
+        label(row, "Your name, for signing mails", 13, True).pack(side="left")
+        self._name = entry(row, "e.g. Sachin Singh", 190)
+        self._name.insert(0, app.config_data["user_name"])
+        self._name.bind("<FocusOut>", lambda _e: app.set_option("user_name", self._name.get().strip()[:60]))
+        self._name.bind("<Return>", lambda _e: app.set_option("user_name", self._name.get().strip()[:60]))
+        self._name.pack(side="right")
+        self.option_switch(box, "speak_replies", "Speak answers aloud", "Answers to questions are also read out.")
+        self.end(box)
+
+        box = self.section("What you can say", "After the wake word. Small words such as \"please\", \"the\" "
+                                               "and \"this page\" are fine.")
+        for title, phrases in self.EXAMPLES:
+            label(box, title, 12, True).pack(anchor="w", padx=18, pady=(6, 0))
+            self.note(box, phrases)
+        self.end(box)
+
+        box = self.section("Good to know")
+        for line in (
+            "\"Scroll down\" gives one push of about a screenful. \"Slowly\" or \"keep scrolling\" scrolls "
+            "steadily until you say \"stop\" (at most 90 seconds).",
+            "\"Open …\" starts applications installed in the Applications folders, or ones you added under "
+            "System Controls → Applications. It cannot run commands or open files.",
+            "Voice obeys the same rules as gestures: nothing happens while control is stopped (except "
+            "\"resume\"), feature switches apply, and Practice mode shows what would happen without doing it.",
+            "macOS: the microphone permission belongs to the app you launched TouchlessX from (Terminal, "
+            "VS Code). If the header shows \"No sound\", allow it under System Settings → Privacy & Security → "
+            "Microphone and restart.",
+            "A quiet room and a normal speaking voice near the laptop work best. Music or a video playing "
+            "nearby can be misheard as commands only if it also says the wake word.",
+        ):
+            self.note(box, "•  " + line)
+        self.end(box)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        if not self._state.winfo_exists():
+            return
+        if self.winfo_ismapped():
+            app = self.app
+            state, detail = app.voice_status
+            text, color = {
+                "off": ("Off", TEXT_DIM), "loading": ("Loading the speech model…", AMBER),
+                "listening": ("● Listening", GREEN), "silent": ("● No sound from the microphone", AMBER),
+                "error": ("● " + (detail or "Error"), RED), "stopped": ("Off", TEXT_DIM),
+            }.get(state, ("Starting…", TEXT_DIM))
+            if app.voice is None:
+                text, color = "Off", TEXT_DIM
+            self._state.configure(text=text, text_color=color)
+            if state == "thinking" and app.voice is not None:
+                self._state.configure(text="● Working on it…", text_color=AMBER)
+            self._heard.configure(text=f"Heard: \"{app.voice_heard}\"" if app.voice_heard else "")
+            self._result.configure(text=app.voice_result)
+            self._ticks = getattr(self, "_ticks", 0) + 1
+            if self._ticks % 10 == 1:  # every few seconds: is the local AI there?
+                status = app.local_ai.status()
+                self._ai.configure(
+                    text={"ready": f"● Local AI ready ({app.local_ai.model}).",
+                          "no_model": f"● Ollama is running but the model is missing - run: ollama pull {app.local_ai.model}",
+                          "offline": "● Local AI is not running. It is started automatically when first needed; "
+                                     "if that fails, install Ollama (brew install ollama)."}[status],
+                    text_color=GREEN if status == "ready" else AMBER)
+        self.after(300, self._refresh)
+
+
 class ClipboardPage(Page):
     title = "Clipboard"
     subtitle = "Select, copy, paste and delete by gesture, with a history of what you copied."
@@ -1433,6 +1571,7 @@ PAGES = {
     "Smart Home": SmartHomePage,
     "Training Studio": TrainingStudioPage,
     "AI Insights": InsightsPage,
+    "Voice": VoicePage,
     "Clipboard": ClipboardPage,
     "Profiles": ProfilesPage,
     "Settings": SettingsPage,

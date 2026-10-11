@@ -217,6 +217,53 @@ version reverts to it. The model is loaded automatically at the next start.
 Applications (System Controls → Applications) and pointer calibration (System Controls
 → Pointer calibration) are set up the same way: pick, then map or capture.
 
+## 8b. Voice commands
+
+Switch on **Voice → Listen for voice commands**. The first time, a speech model (about
+40 MB) is downloaded and macOS asks for microphone access (for the app you launched
+from). The header shows **🎙 Listening** while the microphone is open.
+
+Say **"computer"** and then the command, in one breath or as two phrases:
+
+| Say | What happens |
+|---|---|
+| "computer, scroll down" / "scroll up a little" / "scroll down fast" | One push of scrolling that coasts to a stop |
+| "computer, scroll this page slowly" / "keep scrolling down" | Scrolls steadily until you say "computer, stop" |
+| "computer, go to top" / "go to bottom" / "page down" | Jumps |
+| "computer, change the tab" / "next tab" / "previous tab" / "new tab" / "close tab" | Browser tabs |
+| "computer, open google chrome" / "open safari" / "open notes" | Opens an installed application |
+| "computer, switch app" / "minimize" / "restore" / "go back" / "reload" | Windows and navigation |
+| "computer, click" / "double click" / "right click" | Clicks where the cursor is |
+| "computer, copy" / "paste" / "cut" / "select all" / "undo" / "delete" | Editing |
+| "computer, play" / "pause" / "next song" / "volume up" / "mute" | Media |
+| "computer, stop everything" / "resume" | Emergency stop and resume |
+
+Speech without the wake word is ignored. The Voice page shows what was heard and what
+was done, which is the place to look when a command is not taken. It understands these
+commands and natural variations of them ("please scroll the page down a bit"); it is
+not a free-form assistant. Applications whose names are not ordinary English words
+(for example "Xcode") cannot be asked for by name: add them under System Controls →
+Applications with a name you can say. Voice works with the camera stopped.
+
+## 8c. Assistant: say what you want done
+
+After the wake word you can also ask freely (Voice → **Understand free requests**):
+
+| Say | What happens |
+|---|---|
+| "computer, open YouTube and search for <song>" / "play <song> on YouTube" | YouTube opens with the search results |
+| "computer, open Gmail" / "open WhatsApp" / "open amazon dot com" | The site opens in your browser (nothing needs installing) |
+| "computer, search Google for <anything>" | A Google search |
+| "computer, write a mail about <topic>" / "... to <person> about <topic>" | The AI writes subject and text and opens it as a **draft**; you check and send |
+| "computer, write a paragraph about <topic>" | The AI writes it and pastes it where your cursor is |
+| "computer, type <words>" | Exactly those words are pasted where your cursor is |
+| "computer, what is ...?" / "explain ..." | The answer is shown on the Voice page and read aloud |
+
+Free requests take a second or two; the first mail after starting takes longer while
+the AI loads. Put your name under **Your name, for signing mails**. Choose whether
+drafts open in Gmail or your mail app. The assistant runs entirely on this computer
+and cannot send mail, browse, or click through pages for you; read what it writes.
+
 ## 8. Smart home
 
 Add a webhook URL from your hub and map the device to a gesture. Smart Home is off by
@@ -248,6 +295,8 @@ the command; show a thumbs-up within 5 seconds to send it.
 | A trained gesture is never recognised | Train after recording; make sure AI Assistant is on; the pose may already be a built-in one |
 | Scrolling goes back and forth | Use the Glide scroll style (System Controls); in Follow, drop the pose before bringing your hand back |
 | Scrolling will not stop | Bring your hand back inside the circle shown in the preview, or change the hand pose |
+| Voice: header shows "No sound" | Allow the microphone for the app you launched from (System Settings → Privacy & Security → Microphone), then restart |
+| Voice: commands are ignored | Start with the wake word; check the Voice page for what was heard; speak a little slower and closer |
 | Swipes fire while moving the cursor | Raise *Swipe distance*, shorten *Swipe time window*, or use the Work profile |
 | Low frame rate | Choose a lower resolution in Settings |
 

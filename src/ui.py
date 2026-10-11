@@ -8,6 +8,8 @@ from __future__ import annotations
 import copy
 import math
 import platform
+import subprocess
+import webbrowser
 import queue
 import threading
 import time
@@ -32,6 +34,10 @@ from .profiles import PROFILE_KEYS, ProfileError, ProfileStore, clean_name
 from .safety import SafetyGuard
 from .smart_home import SmartHomeClient
 from .training import GestureDataset, ModelManager, TrainingError, train
+from .assistant import (
+    FREE_REQUEST_WORDS, SITES, AIError, LocalAI, Task, gmail_compose_url, interpret, mailto_url,
+)
+from .voice import Transcriber, VoiceListener, command_vocabulary, installed_apps, parse_command
 from .ui_pages import PAGES, action_label
 from .ui_widgets import (
     ACCENT, ACCENT_HOVER, ACCENT_SOFT, AMBER, BG, BORDER, CATEGORIES, GREEN, ON_ACCENT, PANEL, PANEL_ALT, RED,
@@ -50,6 +56,7 @@ NAV_ITEMS = [
     ("Media & Presentation", "Music, Video, Slides", "♫"),
     ("Smart Home", "IoT Device Control", "⌂"),
     ("AI Insights", "Usage & suggestions", "✦"),
+    ("Voice", "Speak commands", "🎙"),
     ("Clipboard", "Copy, paste, history", "❐"),
     ("Profiles", "Work, Presentation, Media…", "▤"),
     ("Settings", "General & Privacy", "⚙"),
@@ -64,6 +71,10 @@ FEATURE_CARDS = [
     ("ai_assistant", "Insights & custom gestures", "AI Insights"),
 ]
 
+# A request that begins like this asks for something to be done. If it can't be worked
+# out it is reported as not understood - it is never given to the AI as a question.
+_ACTION_STARTS = ("open", "just open", "go to", "launch", "start", "play", "search", "find", "close", "click",
+                  "scroll", "switch", "type", "send", "show", "visit", "minimize", "stop", "pause")
 GUIDE_GESTURES = BUILTIN_GESTURES[:8]  # the dashboard guide has room for eight
 _ENGINE_KEYS = ("pinch_threshold", "swipe_min_distance", "swipe_max_duration", "cooldown_seconds",
                 "stable_frames", "pose_hold_seconds")
@@ -131,6 +142,13 @@ class App(ctk.CTk):
         self.action_controller.callbacks["show_app"] = lambda: self._events.put(("show_window",))
         self.executor.own_window_handler = lambda what: self._events.put(("own_window", what))
         self.clipboard = ClipboardHistory()
+        self.voice: VoiceListener | None = None
+        self.local_ai = LocalAI()
+        self._voice_waiting_until = 0.0       # after the wake word alone: waiting for the request
+        self.voice_apps: dict[str, str] = {}
+        self.voice_status = ("off", "")       # (state, detail) from the listener
+        self.voice_heard = ""                 # the last phrase recognised, for the Voice page
+        self.voice_result = ""                # what was done about it
         self.action_controller.callbacks["paste_previous"] = self._request_paste_previous
         self._practice = False
         self._preferred_hand = "any"
@@ -177,6 +195,8 @@ class App(ctk.CTk):
         self.after(1000, self._tick)
         if config["mini_controller"]:
             self.after(600, lambda: self.set_mini_controller(True, save=False))
+        if config["voice_enabled"]:
+            self.after(900, lambda: self.set_voice(True, save=False))
         if not config["onboarded"]:
             self.after(300, lambda: self.show_page("Getting Started"))
 
@@ -269,6 +289,8 @@ class App(ctk.CTk):
             self.action_controller.scroll_vertical_only = bool(value)
         elif key == "ignore_resting_hand":
             self.gesture_engine.rest_edge = REST_EDGE if value else None
+        elif key in ("voice_wake_word", "assistant_enabled"):
+            self.restart_voice()
         elif key == "clipboard_history" and not value:
             self.clipboard.clear()
         elif key == "emergency_gesture":
@@ -361,6 +383,187 @@ class App(ctk.CTk):
         if save:
             self.config_data["mini_controller"] = bool(on)
             self._schedule_save()
+
+    # ------------------------------------------------------------------ voice
+    def set_voice(self, on: bool, save: bool = True) -> None:
+        """Starts or stops listening for spoken commands. The microphone is only ever
+        open while this is on, and the header shows it."""
+        if on and self.voice is None:
+            self.voice_apps = installed_apps(self.config_data["apps"])
+            folder = self.model_path.parent
+            assistant = bool(self.config_data["assistant_enabled"])
+            transcriber = Transcriber(folder / "whisper") if assistant else None
+            if transcriber is not None:
+                names = ", ".join(sorted({n.title() for n in SITES if " " not in n})[:40])
+                transcriber.prompt = f"Computer, open YouTube and search for a song. Write a mail. Open {names}."
+            self.voice = VoiceListener(
+                folder / "voice", command_vocabulary(self.voice_apps) + (FREE_REQUEST_WORDS if assistant else []),
+                on_heard=lambda kind, text: self._events.put(("voice_heard", kind, text)),
+                on_state=lambda state, detail: self._events.put(("voice_state", state, detail)),
+                wake=self.config_data["voice_wake_word"], app_names=self.voice_apps,
+                transcriber=transcriber,
+                free_words=FREE_REQUEST_WORDS if assistant else (),
+            )
+            self.voice.start()
+        elif not on and self.voice is not None:
+            self.voice.stop()
+            self.voice = None
+            self.voice_status = ("off", "")
+            self.action_controller.stop_scrolling()
+        if save:
+            self.config_data["voice_enabled"] = bool(on)
+            self._schedule_save()
+        self._sync_voice_ui()
+
+    def restart_voice(self) -> None:
+        """Applies a changed wake word or assistant switch to a running listener."""
+        if self.voice is not None:
+            self.set_voice(False, save=False)
+            self.after(700, lambda: self.set_voice(True, save=False))
+
+    def _sync_voice_ui(self) -> None:
+        state = self.voice_status[0]
+        if self.voice is None:
+            self.voice_badge.pack_forget()
+            return
+        text, color = {
+            "loading": ("🎙  Loading…", TEXT_DIM), "listening": ("🎙  Listening", GREEN),
+            "thinking": ("🎙  Working…", AMBER), "silent": ("🎙  No sound", AMBER),
+            "error": ("🎙  Voice error", RED),
+        }.get(state, ("🎙  Starting…", TEXT_DIM))
+        if state == "listening" and time.monotonic() < self._voice_waiting_until:
+            text, color = "🎙  Yes?", AMBER
+        self.voice_badge.configure(text=text, text_color=color)
+        self.voice_badge.pack(side="right", padx=8, before=self.camera_button)
+
+    def _on_voice_heard(self, kind: str, text: str) -> None:
+        """One phrase from the listener: a plain command, a free request, the wake word
+        alone, or speech that was not for us."""
+        self.voice_heard = text
+        self._voice_waiting_until = 0.0
+        wake = self.config_data["voice_wake_word"]
+        if kind == "ignored":
+            self.voice_result = f"Ignored - say \"{wake}\" first."
+        elif kind == "wake":
+            self._voice_waiting_until = time.monotonic() + 6.0
+            self.voice_result = "Yes? Listening for your request…"
+        else:
+            request = parse_command(text, self.voice_apps) if kind == "command" else interpret(text, self.voice_apps)
+            wants_action = text.lower().lstrip().startswith(_ACTION_STARTS)
+            if request is None and kind == "free" and self.config_data["assistant_enabled"] and not wants_action:
+                request = Task("answer", f"Answer: {text[:48]}", text=text)  # a question or remark: ask the AI
+            if request is None:
+                self.voice_result = f"I didn't understand: \"{text}\""
+            elif isinstance(request, Task):
+                self.voice_result = self._run_task(request)
+            else:
+                self.voice_result = self._run_voice_command(request)
+        self._sync_voice_ui()
+
+    def _note_voice_action(self, label: str) -> None:
+        practice = self.action_controller.dry_run
+        shown = f"Practice: {label}" if practice else label
+        self._recent.appendleft((time.monotonic(), "voice", shown))
+        self.action_card.configure(text=shown)
+        self._refresh_recent()
+        if not practice:
+            self.action_log.record("voice", label, 100)
+            self.history.record("voice", label, 100)
+
+    def _run_voice_command(self, command) -> str:
+        controller = self.action_controller
+        if command.kind == "resume":
+            self._set_paused(False)
+            return "Control resumed."
+        if self.safety.paused:
+            return "Stopped - say \"computer, resume\" or press Resume first."
+        try:
+            if command.kind == "scroll":
+                done = controller.voice_scroll(command.direction, command.speed)
+            elif command.kind == "stop_scroll":
+                done = controller.stop_scrolling() or True
+            elif command.kind == "open_app":
+                if not controller.dry_run:
+                    self.executor.open_app(self.voice_apps[command.app])
+                done = True
+            else:
+                done = controller.run_action(command.action)
+        except Exception as exc:
+            return f"Could not do that: {exc}"
+        if not done:
+            return f"\"{command.label}\" is switched off or not available right now."
+        self._sync_pause_ui()  # the command may have stopped or locked control
+        self._note_voice_action(command.label)
+        return f"Done: {command.label}"
+
+    # -------------------------------------------------------------- assistant
+    def _run_task(self, task: Task) -> str:
+        """Carries out an assistant task. Tasks that need the language model run on a
+        helper thread; the result comes back as an "assistant_done" event."""
+        if self.safety.paused:
+            return "Stopped - say \"computer, resume\" or press Resume first."
+        if task.kind == "open_url":
+            if not self.action_controller.dry_run:
+                webbrowser.open(task.url)
+            self._note_voice_action(task.label)
+            return f"Done: {task.label}"
+        if task.kind == "type_text":
+            if not self.action_controller.dry_run:
+                self._paste_text(task.text)
+            self._note_voice_action(task.label)
+            return f"Typed: {task.text}"
+        if not self.config_data["assistant_enabled"]:
+            return "That needs the AI assistant, which is switched off on the Voice page."
+        threading.Thread(target=self._think, args=(task,), daemon=True).start()
+        self.voice_status = ("thinking", "")
+        return f"Working on it: {task.label}…"
+
+    def _think(self, task: Task) -> None:
+        """Helper thread: the language model produces text - and only text."""
+        try:
+            if task.kind == "write_email":
+                result = self.local_ai.write_email(task.topic, task.to, self.config_data["user_name"])
+            elif task.kind == "write_text":
+                result = self.local_ai.write_text(task.text)
+            else:
+                result = self.local_ai.answer(task.text)
+        except AIError as exc:
+            result = exc
+        self._events.put(("assistant_done", task, result))
+
+    def _finish_task(self, task: Task, result) -> None:
+        if self.voice is not None and self.voice_status[0] == "thinking":
+            self.voice_status = ("listening", "")
+        if isinstance(result, Exception):
+            self.voice_result = str(result)
+        elif self.safety.paused:
+            self.voice_result = "Stopped while I was working - nothing was done."
+        elif task.kind == "write_email":
+            subject, body = result
+            if not self.action_controller.dry_run:
+                build = mailto_url if self.config_data["email_target"] == "mail" else gmail_compose_url
+                webbrowser.open(build(subject, body, task.to))
+            self._note_voice_action(task.label)
+            self.voice_result = f"Draft opened - check it before you send.\n\nSubject: {subject}\n\n{body}"
+        elif task.kind == "write_text":
+            if not self.action_controller.dry_run:
+                self._paste_text(result)
+            self._note_voice_action(task.label)
+            self.voice_result = f"Written where your cursor is (also on the clipboard):\n\n{result}"
+        else:
+            self._note_voice_action(task.label)
+            self.voice_result = result
+            if self.config_data["speak_replies"] and platform.system() == "Darwin" and not self.action_controller.dry_run:
+                try:
+                    subprocess.Popen(["say", result[:600]])  # an argument list, never a shell string
+                except OSError:
+                    pass
+        self._sync_voice_ui()
+
+    def _paste_text(self, text: str) -> None:
+        self.copy_to_clipboard(text)
+        # Give the system a moment to take the new clipboard before the paste keystroke.
+        self.after(150, lambda: self.action_controller.run_action("paste", force=True))
 
     # -------------------------------------------------------------- clipboard
     def _request_paste_previous(self) -> bool:
@@ -689,6 +892,8 @@ class App(ctk.CTk):
         self.practice_badge = label(header, "PRACTICE MODE", 11, True, color=AMBER, fg_color=PANEL_ALT,
                                     corner_radius=8, width=120, height=30)  # packed only while practising
         # Shown only while gesture control is locked; clicking it unlocks without any gesture.
+        self.voice_badge = label(header, "🎙  Starting…", 11, True, color=TEXT_DIM, fg_color=PANEL_ALT,
+                                 corner_radius=8, width=126, height=30)  # packed only while voice is on
         self.lock_badge = ctk.CTkButton(
             header, text="🔒  LOCKED · click to unlock", width=190, height=30, corner_radius=8, fg_color=AMBER,
             hover_color=AMBER, text_color=("#ffffff", "#1a1200"), font=ctk.CTkFont(size=11, weight="bold"),
@@ -713,8 +918,8 @@ class App(ctk.CTk):
 
         self._nav: dict[str, tuple] = {}
         for i, (name, subtitle, glyph) in enumerate(NAV_ITEMS):
-            item = ctk.CTkFrame(sidebar, fg_color="transparent", corner_radius=10, height=46)
-            item.pack(fill="x", padx=12, pady=(12 if i == 0 else 2, 2))
+            item = ctk.CTkFrame(sidebar, fg_color="transparent", corner_radius=10, height=44)
+            item.pack(fill="x", padx=12, pady=(10 if i == 0 else 1, 1))
             item.pack_propagate(False)
             icon = label(item, glyph, 17, color=TEXT_DIM, width=30)
             icon.pack(side="left", padx=(10, 6))
@@ -1092,6 +1297,8 @@ class App(ctk.CTk):
                 self._handle_event(*self._events.get_nowait())
         except queue.Empty:
             pass
+        if not self._camera_running:
+            self.action_controller.tick()  # a voice-started scroll keeps moving without camera frames
         with self._latest_lock:
             latest, self._latest = self._latest, None
         if latest is not None and self._camera_running:
@@ -1147,6 +1354,14 @@ class App(ctk.CTk):
             self._sync_pause_ui()  # a gesture may have toggled pause
         elif kind == "recorded":
             self.stop_recording()
+        elif kind == "voice_heard":
+            self._on_voice_heard(data[0], data[1])
+        elif kind == "assistant_done":
+            self._finish_task(data[0], data[1])
+        elif kind == "voice_state":
+            if self.voice is not None:
+                self.voice_status = (data[0], data[1])
+                self._sync_voice_ui()
         elif kind == "paste_clip":
             self._paste_clip(data[0])
         elif kind == "own_window":
@@ -1306,6 +1521,8 @@ class App(ctk.CTk):
         if self._save_job is not None:
             self.after_cancel(self._save_job)
             self._save_now()
+        if self.voice is not None:
+            self.voice.stop()
         self.history.close()
         self.destroy()
 
