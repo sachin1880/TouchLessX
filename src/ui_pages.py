@@ -19,6 +19,7 @@ from .colors import ACCENT_PRESETS, text_on
 from .custom_gestures import CustomGestureError
 from .gesture_engine import CUSTOM_PREFIX
 from .training import MIN_SAMPLES_TO_TRAIN, TrainingError
+from .tutorial import Lesson, build_steps
 from .profiles import ProfileError
 from .smart_home import SmartHomeError
 from .system import is_packaged
@@ -1530,6 +1531,166 @@ class SettingsPage(Page):
         self._log_message.configure(text="History cleared.")
 
 
+class LearnPage(Page):
+    title = "Learn"
+    subtitle = "A guided lesson: every gesture in the active profile, one at a time. Nothing is clicked while you learn."
+
+    def build(self) -> None:
+        app = self.app
+        signature = self._signature()
+        if getattr(self, "_lesson_for", None) != signature:
+            controller = app.action_controller
+            steps = build_steps(
+                controller.action_for, action_label, gesture_glyph, gesture_label,
+                controller.is_enabled, app.all_gestures(), controller.emergency_gesture,
+            )
+            self.lesson = Lesson(steps, controller.double_click_seconds)
+            self._lesson_for = signature
+        lesson = self.lesson
+
+        top = ctk.CTkFrame(self.body, fg_color="transparent")
+        top.pack(fill="x", padx=12, pady=(4, 0))
+        practice = len(lesson.practice_steps())
+        done = sum(1 for s in lesson.practice_steps() if s.key in lesson.completed)
+        label(top, f"Step {lesson.index + 1} of {len(lesson.steps)}", 12, True, color=TEXT_DIM).pack(side="left")
+        label(top, f"{done} of {practice} gestures learned  ·  profile: {app.config_data['active_profile']}",
+              12, color=TEXT_DIM).pack(side="right")
+        dots = ctk.CTkFrame(self.body, fg_color="transparent")
+        dots.pack(fill="x", padx=12, pady=(4, 6))
+        for i, step in enumerate(lesson.steps):
+            colour = GREEN if step.key in lesson.completed else (ACCENT if i == lesson.index else TRACK)
+            dot = ctk.CTkFrame(dots, fg_color=colour, width=8, height=6, corner_radius=3)
+            dot.pack(side="left", fill="x", expand=True, padx=2)
+            dot.bind("<Button-1>", lambda _e, n=i: self._go(n))
+
+        row = ctk.CTkFrame(self.body, fg_color="transparent")
+        row.pack(fill="both", expand=True, padx=12, pady=4)
+        row.grid_columnconfigure(0, weight=3, uniform="learn")
+        row.grid_columnconfigure(1, weight=2, uniform="learn")
+
+        camera = card(row)
+        camera.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self.preview_panel = ctk.CTkFrame(camera, fg_color=PANEL_ALT, corner_radius=10, height=380)
+        self.preview_panel.pack(fill="both", expand=True, padx=14, pady=14)
+        self.preview_panel.pack_propagate(False)
+        self.preview_label = ctk.CTkLabel(self.preview_panel, text="Waiting for the camera…", text_color=TEXT_DIM)
+        self.preview_label.pack(fill="both", expand=True)
+
+        step = lesson.step
+        panel = card(row)
+        panel.grid(row=0, column=1, sticky="nsew")
+        label(panel, step.glyph, 54).pack(anchor="w", padx=18, pady=(14, 0))
+        label(panel, step.title, 20, True).pack(anchor="w", padx=18)
+        if step.does:
+            label(panel, f"Does:  {step.does}", 13, True, color=ACCENT).pack(anchor="w", padx=18, pady=(2, 0))
+        label(panel, step.how, 13, justify="left", wraplength=360).pack(anchor="w", padx=18, pady=(10, 0))
+        if step.note:
+            label(panel, step.note, 11, color=AMBER, justify="left", wraplength=360).pack(anchor="w", padx=18,
+                                                                                          pady=(8, 0))
+        if step.goal != "info":
+            self._bar = ctk.CTkProgressBar(panel, progress_color=GREEN, fg_color=TRACK, height=10)
+            self._bar.pack(fill="x", padx=18, pady=(16, 4))
+            self._bar.set(1.0 if step.key in lesson.completed else lesson.progress)
+            self._status = label(panel, "", 13, True)
+            self._status.pack(anchor="w", padx=18)
+            self._seeing = label(panel, "", 11, color=TEXT_DIM)
+            self._seeing.pack(anchor="w", padx=18, pady=(0, 10))
+            self._show_status()
+        if step.key == "done":
+            if app.safety.paused:
+                label(panel, "Control is paused right now.", 12, color=AMBER).pack(anchor="w", padx=18, pady=(12, 0))
+                button(panel, "Resume control", self._resume, "ghost", 160).pack(anchor="w", padx=18, pady=(6, 0))
+            button(panel, "Finish - start using it", self._finish, "primary", 220).pack(anchor="w", padx=18,
+                                                                                         pady=(12, 0))
+            button(panel, "Do the lesson again", self._restart, "ghost", 180).pack(anchor="w", padx=18, pady=(6, 14))
+
+        nav = ctk.CTkFrame(self.body, fg_color="transparent")
+        nav.pack(fill="x", padx=12, pady=10)
+        if lesson.index > 0:
+            button(nav, "← Back", self._back, "ghost", 100).pack(side="left")
+        if not lesson.is_last:
+            done_step = step.goal == "info" or step.key in lesson.completed
+            button(nav, "Next →" if done_step else "Skip →", self._next, "primary" if done_step else "ghost",
+                   110).pack(side="right")
+        self._refresh_seeing()
+
+    def _signature(self) -> tuple:
+        controller = self.app.action_controller
+        return (self.app.config_data["active_profile"],
+                tuple((g, controller.action_for(g)) for g in self.app.all_gestures()))
+
+    def _show_status(self) -> None:
+        lesson, step = self.lesson, self.lesson.step
+        if step.key in lesson.completed:
+            self._status.configure(text="✅  Well done!", text_color=GREEN)
+        elif step.goal == "double" and lesson.progress > 0:
+            self._status.configure(text="One pinch - now the second, quickly!", text_color=AMBER)
+        elif step.goal == "trigger" and step.target > 1 and lesson.progress > 0:
+            self._status.configure(text="Once more…", text_color=AMBER)
+        elif lesson.progress > 0:
+            self._status.configure(text="Keep going…", text_color=AMBER)
+        else:
+            self._status.configure(text="Your turn - try it now", text_color=TEXT)
+
+    def on_lesson_event(self, event, now: float) -> None:
+        """A gesture event from the camera, delivered while this page is open."""
+        lesson = self.lesson
+        if lesson.step.goal == "info" or not hasattr(self, "_bar") or not self._bar.winfo_exists():
+            return
+        if event.name not in lesson.step.gestures:
+            lesson.missed(now)
+        finished = lesson.feed(event, now)
+        self._bar.set(lesson.progress)
+        self._show_status()
+        if finished:
+            self.after(1200, self._auto_next, lesson.index)
+
+    def _auto_next(self, index: int) -> None:
+        if self.lesson.index == index and not self.lesson.is_last and self.winfo_ismapped():
+            self._next()
+
+    def _refresh_seeing(self) -> None:
+        seeing = getattr(self, "_seeing", None)
+        if seeing is None or not seeing.winfo_exists():
+            return  # rebuilt: the new build runs its own loop
+        if self.winfo_ismapped():
+            event = self.app.last_event
+            if not self.app.camera_running:
+                text = "The camera is off - press Start Camera in the header."
+            elif event is None or event.name in ("none", "resting"):
+                text = "I can't see a hand yet."
+            else:
+                text = f"I see:  {gesture_glyph(event.name)}  {gesture_label(event.name)}"
+            seeing.configure(text=text)
+        self.after(200, self._refresh_seeing)
+
+    def _go(self, index: int) -> None:
+        self.lesson.go(index)
+        self.rebuild()
+
+    def _next(self) -> None:
+        self._go(self.lesson.index + 1)
+
+    def _back(self) -> None:
+        self._go(self.lesson.index - 1)
+
+    def _restart(self) -> None:
+        self._lesson_for = None
+        self.rebuild()
+
+    def _resume(self) -> None:
+        self.app._set_paused(False)
+        self.rebuild()
+
+    def _finish(self) -> None:
+        self.app.config_data["onboarded"] = True
+        self.app.set_practice(False)
+        self.app.show_page("Dashboard")
+
+    def on_show(self) -> None:
+        self.rebuild()  # keeps the place in the lesson unless the profile's gestures changed
+
+
 class OnboardingPage(Page):
     title = "Getting Started"
     subtitle = "Four things to know before you let your hand take over."
@@ -1575,9 +1736,14 @@ class OnboardingPage(Page):
 
         row = ctk.CTkFrame(self.body, fg_color="transparent")
         row.pack(fill="x", padx=12, pady=10)
-        button(row, "Start using TouchlessX", app.finish_onboarding, "primary", 220).pack(side="left", padx=(0, 8))
-        button(row, "Practise first", self._practise, "ghost", 140).pack(side="left")
+        button(row, "Start the guided lesson", self._learn, "primary", 220).pack(side="left", padx=(0, 8))
+        button(row, "Skip - start using TouchlessX", app.finish_onboarding, "ghost", 230).pack(side="left", padx=(0, 8))
+        button(row, "Practise freely", self._practise, "ghost", 140).pack(side="left")
         self._refresh()
+
+    def _learn(self) -> None:
+        self.app.config_data["onboarded"] = True
+        self.app.show_page("Learn")
 
     def _practise(self) -> None:
         self.app.set_practice(True)
@@ -1617,4 +1783,5 @@ PAGES = {
     "Profiles": ProfilesPage,
     "Settings": SettingsPage,
     "Getting Started": OnboardingPage,
+    "Learn": LearnPage,
 }

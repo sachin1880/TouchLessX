@@ -9,6 +9,11 @@ runs locally — no cloud account, no video stored or uploaded.
 
 ![Dashboard: live camera preview, current gesture, quick controls and system status](docs/screenshots/dashboard.png)
 
+**New here?** Open **Learn** in the sidebar: a guided lesson that teaches every gesture in your
+profile, one at a time, with the camera checking each one. Nothing is clicked while you learn.
+
+![Learn: a guided lesson with live camera preview and one gesture per step](docs/screenshots/learn.png)
+
 | Gesture Studio | Voice |
 |---|---|
 | ![Gesture Studio: practice mode and gesture-to-action mapping](docs/screenshots/gesture-studio.png) | ![Voice: wake word, voice commands and the local assistant](docs/screenshots/voice.png) |
@@ -29,6 +34,8 @@ runs locally — no cloud account, no video stored or uploaded.
 | 👍 Thumbs Up | Confirm a pending smart-home command | — |
 | 👆 👇 Fast flick up / down | Not mapped by default | — |
 | 🖐 Opening the hand out of a fist | Not mapped by default (Restore Window in Browse) | — |
+| 🤏🤏 Two-hand pinch, move hands apart / together | Zoom in / out (⌘ + / ⌘ −; Ctrl on Windows) | — |
+| 🙌 Both palms open, held | Pause / resume control | — |
 
 The **Air Mouse** profile makes one hand a complete mouse: the open hand (or a
 pointing finger) moves the cursor, pinch is the left button (once = click, twice =
@@ -128,6 +135,7 @@ tracks for a few seconds and prints the measured frame rate. It sends no input.
 | Page | What it does |
 |---|---|
 | **Dashboard** | Live preview with landmarks, current gesture / confidence / last action, on-off switches per category, recent actions, session analytics, gesture guide, system status. |
+| **Learn** | A guided lesson built from the active profile: one step per gesture (plus double-click), each finished when the camera sees it done, with a live preview. Practice mode is on while the page is open. |
 | **Gesture Studio** | Practice area (nothing is sent), gesture → action mapping with an on/off switch per gesture, per-gesture confidence and cooldown, recognition sensitivity, reset. |
 | **Training Studio** | Record examples of your own poses, train a scikit-learn classifier, see accuracy / precision / recall and the confusion matrix, keep and revert model versions. Gesture control is off while this page is open. |
 | **System Controls** | Cursor speed, smoothing, dead zone, double-click window, scroll speed, drag, user-defined keyboard shortcuts, applications to open, pointer calibration, input-permission status. |
@@ -247,6 +255,7 @@ TouchlessX/
 │   ├── gesture_engine.py     # Classification, debouncing, hold-to-fire, swipes
 │   ├── custom_gestures.py    # Landmark features + the distance check for trained poses
 │   ├── training.py           # Dataset (CSV), scikit-learn training, evaluation, model versions
+│   ├── tutorial.py           # The guided lesson on the Learn page: steps and progress
 │   ├── action_controller.py  # Gesture -> action dispatch, cursor filter, shortcuts, OS input
 │   ├── safety.py             # Pause / emergency stop, lock, confidence gating
 │   ├── profiles.py           # Profile store, presets, import validation
@@ -295,9 +304,10 @@ does not contain it.
 - Built-in gestures are geometry-based and tuned for a hand facing the camera in
   reasonable lighting. No accuracy or latency figure is published: none has been
   measured across users, lighting and hardware (see docs/QA_CHECKLIST.md).
-- Single hand, single user at a time.
-- There is no system tray icon, launch-at-login, or system-wide pause hotkey. The
-  floating mini controller covers pausing from other apps.
+- One user at a time. Two hands are used only for the two-hand pinch (zoom) and
+  both palms (pause); every other gesture is one-handed.
+- There is no system-wide pause hotkey: Space and Esc work only while TouchlessX is the
+  front window. The floating mini controller covers pausing from other apps.
 - Custom gestures are only consulted for poses the built-in rules don't recognise, and
   are matched in 2D.
 - "Either hand" follows whichever hand the tracker reports first; choose a controlling
@@ -305,17 +315,18 @@ does not contain it.
 - Opening applications works on macOS and Windows only. Windows support as a whole is
   written but untested.
 - Smart Home sends a plain HTTP POST per trigger; it has no device discovery or state.
-- Not packaged: it runs from source. There is no installer, code signing, update check
-  or licensing.
+- The macOS app built by `scripts/build_macos.sh` is not code-signed, so macOS warns the
+  first time it opens. There is no Windows build, and the menu-bar icon is macOS only.
+- The update check only reports a new version; it does not install it.
 - Not for vehicle, medical, industrial or other safety-critical control.
 
 ## Not implemented from the product scope
 
-- Packaging and distribution: installer, signing, update checks, licence activation,
-  editions.
+- Distribution: code signing and notarisation, automatic update installation, a
+  Windows installer, licence activation, editions.
 - Cloud services: accounts, sync, remote AI.
-- System tray, launch at login, global hotkey.
-- Two-hand gestures, voice commands, application-aware profile switching.
+- A system-wide pause hotkey and a Windows tray icon.
+- Application-aware profile switching.
 - From the GestureAI specification: the PySide6 interface and its folder layout (this
   app stays on CustomTkinter with the modules above), Matplotlib charts, cursor
   acceleration, optional video recording, and running user-defined commands (left out

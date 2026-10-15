@@ -13,8 +13,11 @@ your computer.
    enable the app you launched from, then restart TouchlessX. Without it gestures are
    recognised but nothing is controlled, and the dashboard shows
    *System Controls: No permission*.
-4. Press **Practise first** to try the gestures in practice mode, where nothing is
-   sent to the computer.
+4. Press **Start the guided lesson**. The **Learn** page teaches every gesture in the
+   active profile one at a time: it shows what to do and what the gesture does, and
+   moves on by itself once the camera sees you do it. Practice mode is on throughout,
+   so nothing is clicked. Skip or go back to any step; open **Learn** in the sidebar
+   to take the lesson again, for example after switching profile.
 
 ## 2. Using it well
 
@@ -157,6 +160,8 @@ There is no system-wide pause hotkey: Space/Esc only work while TouchlessX is in
 
 - **Dashboard** — preview, current gesture, confidence, last action, on/off switch per
   feature, recent gestures, session analytics, system status.
+- **Learn** — the guided lesson: one gesture per step, checked by the camera, in
+  practice mode.
 - **Gesture Studio** — practice area, gesture → action mapping, an on/off switch and
   optional own confidence / cooldown per gesture, recognition sensitivity.
 - **Training Studio** — record, train and evaluate your own gestures (section 8a).

@@ -51,6 +51,7 @@ __version__ = "1.3.0"
 # (page name, subtitle, glyph)
 NAV_ITEMS = [
     ("Dashboard", "Live overview", "⌂"),
+    ("Learn", "Guided gesture lesson", "🎓"),
     ("Gesture Studio", "Mappings, sensitivity, practice", "✋"),
     ("Training Studio", "Teach your own gestures", "◉"),
     ("System Controls", "Mouse & Keyboard", "➤"),
@@ -82,7 +83,7 @@ _ENGINE_KEYS = ("pinch_threshold", "swipe_min_distance", "swipe_max_duration", "
 _CONTROLLER_KEYS = ("cursor_smoothing", "cursor_dead_zone", "active_area_margin", "scroll_speed",
                     "drag_hold_seconds", "engage_seconds", "double_click_seconds")
 _RECORD_LIMIT = 300  # samples per recording run; it stops by itself there
-PREVIEW_PAGES = ("Dashboard", "Training Studio")
+PREVIEW_PAGES = ("Dashboard", "Training Studio", "Learn")
 REST_EDGE = 0.98  # wrist this low in the frame = a resting hand (chosen from recorded real use)
 
 
@@ -347,13 +348,16 @@ class App(ctk.CTk):
     def _update_dry_run(self) -> None:
         # Training is kept apart from live control: while the Training Studio is open,
         # the poses being recorded must not click or scroll anything.
+        # The guided lesson likewise: a learner's first pinches must not click anything.
         training = self._current_page == "Training Studio"
-        on = self._practice or training
+        learning = self._current_page == "Learn"
+        on = self._practice or training or learning
         if on != self.action_controller.dry_run:
             self.action_controller.release()
             self.action_controller.dry_run = on
         if on:
-            self.practice_badge.configure(text="TRAINING · CONTROL OFF" if training else "PRACTICE MODE")
+            self.practice_badge.configure(text="TRAINING · CONTROL OFF" if training else
+                                          "LESSON · PRACTICE MODE" if learning else "PRACTICE MODE")
             self.practice_badge.pack(side="right", padx=8, before=self.camera_button)
         else:
             self.practice_badge.pack_forget()
@@ -1291,6 +1295,8 @@ class App(ctk.CTk):
             tracker.preferred_hand = self._preferred_hand
             result = tracker.process(frame)
             event = self.gesture_engine.update(result, started)
+            if self._current_page == "Learn":
+                self._events.put(("lesson", event, started))  # every frame: a flick lasts only one
             try:
                 dispatch = self.action_controller.dispatch(event)
             except Exception:
@@ -1412,6 +1418,10 @@ class App(ctk.CTk):
             self.action_card.configure(text=action)
             self._refresh_recent()
             self._sync_pause_ui()  # a gesture may have toggled pause
+        elif kind == "lesson":
+            page = self._pages.get("Learn")
+            if page is not None and self._current_page == "Learn":
+                page.on_lesson_event(*data)
         elif kind == "recorded":
             self.stop_recording()
         elif kind == "update_checked":
