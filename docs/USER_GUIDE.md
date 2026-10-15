@@ -160,6 +160,8 @@ There is no system-wide pause hotkey: Space/Esc only work while TouchlessX is in
 
 - **Dashboard** — preview, current gesture, confidence, last action, on/off switch per
   feature, recent gestures, session analytics, system status.
+- **Holo Desk** — the JARVIS workspace: camera, gesture ring, system controls, panels you
+  move by hand, a dock and your gesture cards (section 8e).
 - **Learn** — the guided lesson: one gesture per step, checked by the camera, in
   practice mode.
 - **Gesture Studio** — practice area, gesture → action mapping, an on/off switch and
@@ -168,12 +170,15 @@ There is no system-wide pause hotkey: Space/Esc only work while TouchlessX is in
 - **System Controls** — cursor speed and smoothing, double-click window, scroll speed,
   drag, your keyboard shortcuts, input permission.
 - **Media & Presentation** — switches, slide keys, test buttons, compatibility notes.
-- **Smart Home** — webhooks to a hub, with confirmation.
+- **Smart Home** — webhooks to a hub, with confirmation (section 8f).
 - **AI Insights** — usage from the local history, recognition quality, suggestions,
   custom gesture training.
-- **Profiles** — Default, Work, Presentation, Media and your own; rename, duplicate,
-  import, export.
-- **Settings** — theme, accent colour, mini controller, camera, privacy and data, help.
+- **Voice** — voice commands, wake word and the assistant (sections 8b and 8c).
+- **Face Control** — the hands-free mode (section 8d).
+- **Clipboard** — copy / paste gestures and the history of copied texts.
+- **Profiles** — Default, Work, Presentation, Air Mouse, Browse, GestureAI, JARVIS, Media
+  and your own; rename, duplicate, import, export.
+- **Settings** — theme (dark, JARVIS or light), accent colour, mini controller, camera, privacy and data, help.
   Under **Appearance**, click a colour dot or **Custom…** to recolour buttons, switches
   and highlights at once; it works in both the dark and the light theme. The red
   emergency stop and the green / amber status colours stay as they are on purpose.
@@ -340,11 +345,43 @@ to any gesture in Gesture Studio. Desktop switching needs System Settings → Ke
 Keyboard Shortcuts → Mission Control → "Move left / right a space" switched on.
 Full-screen windows can't be moved.
 
-## 8. Smart home
+## 8f. Smart home
 
-Add a webhook URL from your hub and map the device to a gesture. Smart Home is off by
-default. With **Ask for confirmation** on (the default), the device gesture only arms
-the command; show a thumbs-up within 5 seconds to send it.
+TouchlessX switches devices through your smart-home hub; it never talks to a device
+directly.
+
+1. In your hub, create a webhook that switches the device:
+   - **Home Assistant** (free): an automation with trigger **Webhook** and the device's
+     action, e.g. *Toggle desk lamp*. Copy the webhook URL.
+   - **IFTTT**: a *Webhooks* applet. **Node-RED**: an *http in* node.
+2. On the **Smart Home** page, enter a name, the URL and a token if your hub needs one.
+   Press **Add**, then **Test**.
+3. Switch **Smart Home** on (dashboard) and map the device to a gesture in Gesture Studio.
+
+Smart Home is off by default. With **Ask for confirmation** on (the default), the device
+gesture only arms the command; show a thumbs-up within 5 seconds to send it. Tokens are
+kept on this computer only.
+
+The webhook is one-way: TouchlessX does not know whether the device is on or off.
+Devices that only work through their maker's app - for example Xiaomi Mi Home cameras -
+need a hub that supports them first (Home Assistant with its Xiaomi integration); what
+can be controlled then depends on the model. Live camera video stays in the maker's app.
+
+## 8g. Controlling your iPhone
+
+TouchlessX runs on the Mac, but it can control an iPhone through macOS's **iPhone
+Mirroring** app, which shows the iPhone's screen in a window you work with the Mac's
+mouse and keyboard:
+
+1. Open **iPhone Mirroring** (Spotlight or Launchpad) and follow its one-time setup.
+2. Use your gestures on its window: pinch = tap, held pinch and move = swipe, the scroll
+   gesture scrolls, the virtual keyboard types.
+3. iPhone Mirroring's shortcuts can be mapped as keyboard shortcuts (section 7):
+   ⌘1 Home Screen, ⌘2 App Switcher, ⌘3 Spotlight.
+
+It needs iOS 18 or newer, the same Apple ID on the Mac and the iPhone, the iPhone nearby
+and locked, and a region where Apple offers the feature. On the iPhone itself, iOS has
+its own **Eye Tracking** (Settings → Accessibility).
 
 ## 9. Privacy
 
@@ -375,6 +412,13 @@ the command; show a thumbs-up within 5 seconds to send it.
 | Voice: commands are ignored | Start with the wake word; check the Voice page for what was heard; speak a little slower and closer |
 | Swipes fire while moving the cursor | Raise *Swipe distance*, shorten *Swipe time window*, or use the Work profile |
 | Low frame rate | Choose a lower resolution in Settings |
+| Face Control: clicks by itself | Lower that expression's sensitivity under Tuning, or set it to No action |
+| Face Control: a wink or expression is not noticed | Watch its bar on the Face Control page and raise its sensitivity; face the camera with even light |
+| Face Control: cursor drifts (Point with your head) | Look at the middle of the screen and press Recenter, or use the Like a mouse style |
+| Holo Desk: a panel will not move | Pinch on the panel's title bar and hold it a moment before moving |
+| Virtual keyboard types nothing | Pinch into the text field you want first; check that control is not paused or in practice mode |
+| Next / previous desktop does nothing | Switch on System Settings → Keyboard → Keyboard Shortcuts → Mission Control → "Move left / right a space" |
+| A window will not move or snap | It is full screen, or the app does not allow it; leave full screen first |
 
 `python app.py --check` tests the camera and tracking without opening the window.
 
@@ -383,4 +427,6 @@ the command; show a thumbs-up within 5 seconds to send it.
 - Recognition depends on lighting, background, distance and hand orientation. No
   accuracy figure is claimed; none has been measured across users and conditions.
 - Tested on macOS (Apple Silicon) only.
+- Face Control works differently from face to face; tune the sensitivities to yours.
+- Window moving and snapping are macOS only and not for full-screen windows.
 - Not for vehicles, medical devices, machinery or any safety-critical use.

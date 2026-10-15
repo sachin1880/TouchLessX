@@ -3,14 +3,14 @@
 Everything that is implemented in this project, how it works, and how to use it.
 
 - **What it is:** a desktop application that lets you control your computer with hand
-  gestures seen by the webcam and with spoken requests, without touching the mouse or
-  keyboard.
+  gestures seen by the webcam, with your face (head movement and expressions), and with
+  spoken requests, without touching the mouse or keyboard.
 - **Language:** Python 3.10–3.12.
 - **Runs on:** macOS (developed and tested on an Apple-silicon MacBook). Windows code
   paths exist but have not been tested.
 - **Where the work happens:** on your own computer. Camera frames, voice audio and the
   AI model are all processed locally.
-- **Size:** about 7,700 lines of application code in 20 modules, and 283 automated tests.
+- **Size:** about 9,800 lines of application code in 28 modules, and 333 automated tests.
 
 ---
 
@@ -19,14 +19,18 @@ Everything that is implemented in this project, how it works, and how to use it.
 | Area | What is implemented |
 |---|---|
 | Hand tracking | Live webcam preview, 21 hand landmarks drawn on the picture, frame-rate and latency display |
-| Gestures | 16 built-in gestures, two of them made with both hands, plus gestures you train yourself |
+| Gestures | 17 built-in gestures, two of them made with both hands, plus gestures you train yourself |
 | Mouse | Cursor movement, click, double-click, right-click, drag and drop, scrolling in both directions |
 | Keyboard and text | Copy, cut, paste, select all, delete, undo, redo, your own keyboard shortcuts |
-| Windows and browser | Minimise and restore a window, switch application, tabs, back / forward / reload, zoom |
+| Windows and browser | Minimise and restore; move, resize and snap other apps' windows; switch desktops and application; tabs, back / forward / reload, zoom |
 | Media and slides | Play / pause, next / previous track, volume, mute, next / previous slide |
 | Voice | Wake word, about 70 spoken commands, works offline |
+| Face Control | Hands-free mode: head moves the cursor; wink, raised eyebrows, puckered lips, smile and open mouth mapped to clicks, scroll and more |
+| JARVIS mode | Holo Desk workspace with panels moved by hand, cyan HUD theme, JARVIS profile |
+| Virtual keyboard | On-screen keyboard typed on by pinching; types into the app in front |
+| Learn | A guided lesson that teaches every gesture, checked by the camera |
 | Assistant | "Open YouTube and search …", "write a mail about …", questions, dictation — using a local AI model |
-| Profiles | Seven ready-made gesture layouts, plus create / rename / duplicate / import / export |
+| Profiles | Eight ready-made gesture layouts, plus create / rename / duplicate / import / export |
 | Training Studio | Record your own gesture, train a classifier, see its accuracy, keep and revert model versions |
 | Safety | Emergency stop button and gesture, lock / unlock, practice mode, confirmation for smart-home commands |
 | Settings | Every gesture can be remapped; sensitivity, cursor speed, scroll style, theme and accent colour |
@@ -57,6 +61,14 @@ Each camera frame goes through these steps, about 30 times a second:
 
 Voice runs alongside on its own thread: microphone → wake word → speech-to-text →
 command or assistant task → the same action controller.
+
+With **Face Control** on, steps 2–3 are replaced: `face_control.py` finds 478 face points
+and expression scores with MediaPipe's Face Landmarker, turns head movement into cursor
+movement and expressions into actions, and hands them to the same action controller -
+so pause, practice mode and the feature switches apply exactly as for hands.
+
+Clicks pass one more check: if the cursor is over the **virtual keyboard**, the click is
+turned into a key typed into the application in front (`virtual_keyboard.py`).
 
 The camera work runs on a background thread so the window never freezes.
 
@@ -93,7 +105,7 @@ else works without it.
 
 ```bash
 python app.py --check        # tests camera and hand tracking without opening the window
-python -m pytest tests       # runs the 283 automated tests
+python -m pytest tests       # runs the 333 automated tests
 ```
 
 ---
@@ -105,8 +117,10 @@ python -m pytest tests       # runs the 283 automated tests
    enable the app you launched from (Terminal or VS Code), then restart TouchlessX.
    Without this, gestures are recognised but nothing moves.
 3. **Microphone permission** — only if you switch voice on.
-4. A **Getting Started** page explains the gestures and how to stop control. Press
-   **Practise first** to try gestures with nothing actually being sent.
+4. A **Getting Started** page explains the camera, permissions and how to stop control.
+   Press **Start the guided lesson**: the **Learn** page teaches each gesture of your
+   profile, one step at a time, and moves on when the camera sees you do it. Nothing is
+   clicked during the lesson.
 
 On macOS these permissions belong to the program you start TouchlessX from, not to
 TouchlessX itself.
@@ -125,7 +139,7 @@ TouchlessX itself.
 
 ## 6. Gestures
 
-### The 16 built-in gestures
+### The 17 built-in gestures
 
 | Gesture | How to make it |
 |---|---|
@@ -141,6 +155,7 @@ TouchlessX itself.
 | Open from fist | Opening the hand within about a second of a held fist |
 | Both palms | Both hands raised and open, held for 0.6 s |
 | Two-hand pinch | Both hands pinching; move them apart or together |
+| Thumb + index ("L") | Index up and thumb out; spread or close them to zoom with one hand. Only recognised while mapped |
 
 By default **both palms** pauses and resumes control, and the **two-hand pinch** zooms
 in as the hands move apart and out as they come together. While two raised hands are
@@ -173,13 +188,14 @@ All of these values can be changed in the app.
 
 | Group | Actions |
 |---|---|
-| Mouse | Move cursor, left click, right click, double click, scroll, page up / down, jump to top / bottom |
+| Mouse | Move cursor, left click, right click, double click, scroll, scroll up / down a step, page up / down, jump to top / bottom |
 | Text | Copy, cut, paste, paste previous copy, select all, delete, undo, redo |
-| Windows | Minimise, restore, switch application, close tab / window |
+| Windows | Minimise, restore, switch application, close tab / window, move / resize the front window with the hand, snap it to the left or right half, maximise, centre |
+| Desktops | Next / previous desktop, Mission Control |
 | Browser | Next / previous / new tab, back, forward, reload, zoom in / out |
 | Media | Play / pause, next / previous track, volume up / down, mute |
 | Slides | Next slide, previous slide |
-| Control | Pause / resume, emergency stop, lock, confirm / unlock, safety hold, show TouchlessX |
+| Control | Pause / resume, emergency stop, lock, confirm / unlock, safety hold, show TouchlessX, show / hide the virtual keyboard |
 | Yours | Named keyboard shortcuts, "open application", smart-home devices |
 
 Keyboard shortcuts are built from an approved list of keys. "Open application" accepts
@@ -200,6 +216,7 @@ A profile is a complete gesture layout. Switch from the **Profile** menu in the 
 | Air Mouse | One hand as a full mouse: move, click, double-click, drag, right-click, scroll |
 | Browse | Open palm or two fingers scroll, point moves the cursor, three fingers copy, thumbs-up pastes, fist minimises, opening the hand restores |
 | GestureAI | Lock-based: fist locks all control, thumbs-up unlocks, open palm is a safe pose |
+| JARVIS | Point moves, pinch clicks and drags, open palm rests, flicks change desktop or scroll, thumb + index "L" zooms, three fingers move the front window, fist is an emergency stop, both palms resume |
 | Media | Play / pause, volume, track skipping; no cursor |
 
 You can create your own, rename, duplicate, delete, export to a file and import. An
@@ -289,9 +306,78 @@ The last five models are kept, so a worse one can be reverted.
 **System Controls → Pointer calibration:** show the top-left and bottom-right of the
 area your hand comfortably covers. The cursor then spans the whole screen inside it.
 
+### Learn: the guided lesson
+Open **Learn**. Each step shows a gesture, how to make it and what it does in the active
+profile, next to the camera preview. It completes by itself once the camera sees it
+("Well done!") and moves on. Practice mode is on for the whole lesson. Skip, go back or
+jump to any step; switching profile rebuilds the lesson.
+
+### Face Control (hands-free)
+1. Open **Face Control** and switch on **Use Face Control**. The face model (about 4 MB)
+   is downloaded once. Hand gestures are off while it is on.
+2. Move your head to move the cursor. The default **Like a mouse** style moves a little
+   for slow movements and far for quick ones; **Point with your head** is the alternative.
+3. Expressions and their default actions:
+
+| Expression | Default action |
+|---|---|
+| Wink left eye | Click; two winks = double-click |
+| Raise eyebrows | Right click |
+| Pucker lips | Double-click (opens files and folders) |
+| Smile | Minimise the window in front |
+| Open mouth | Scroll mode on / off: look up or down to scroll |
+| Both eyes closed about a second | Pause / resume |
+
+Every expression has an action menu, a live bar and its own sensitivity. The cursor
+holds still while an expression is made, so clicks land on target. Ordinary blinks are
+ignored.
+
+### JARVIS mode and the Holo Desk
+1. **Settings → Theme → JARVIS (cyan HUD)**, and the **JARVIS** profile in the header.
+2. Open **Holo Desk**: camera preview, a Current Gesture ring, System Controls, and
+   panels - Files, Notes, Music, System Info (CPU, memory, battery) and Clock.
+3. **Move a panel:** point at its title bar, pinch and hold, move, open your fingers.
+   **Resize** by the ◢ corner. Panels glide, snap to a grid, keep their place between
+   sessions, and are dropped in place if the hand is lost. **Reset layout** restores them.
+
+Drag is switched on automatically while the Holo Desk is open.
+
+### Virtual keyboard
+Open it from the Holo Desk or its dock, or map **Show / Hide Keyboard** to a gesture.
+Point at a key (it lights up) and pinch. The pinch is never delivered to the keyboard
+window as a click, so the key is typed into **the application you are using**. Letters,
+numbers, Space, Enter, Backspace, Shift and punctuation; one pinch types one key.
+
+### Moving windows and switching desktops
+Map **Move Window**, **Resize Window**, **Window to Left / Right Half**, **Maximize
+Window**, **Center Window**, **Next / Previous Desktop** or **Mission Control** to
+gestures. Window actions use the macOS Accessibility API on the front application's
+window; full-screen windows and some system windows cannot be moved. Desktop switching
+needs System Settings → Keyboard → Keyboard Shortcuts → Mission Control → "Move left /
+right a space" switched on.
+
+### Controlling an iPhone
+macOS's **iPhone Mirroring** app shows the iPhone's screen in a window that is
+controlled with the Mac's mouse and keyboard - so TouchlessX gestures control the
+iPhone: pinch taps, a held pinch swipes, the virtual keyboard types. It needs iOS 18 or
+newer, the same Apple ID on both, the iPhone nearby and locked, and a region where Apple
+offers the feature. TouchlessX itself does not run on the iPhone.
+
 ### Smart home
-Add a webhook address from a home hub, switch Smart Home on, and map the device to a
-gesture. By default the command is only sent after a thumbs-up confirmation.
+TouchlessX controls devices through a home hub, never directly:
+
+1. In the hub, create a webhook that switches the device - for example a Home Assistant
+   automation with a **Webhook** trigger, an IFTTT Webhooks applet, or a Node-RED
+   "http in" node.
+2. In **Smart Home**, add the device's name, the webhook URL and a token if needed;
+   **Test** it.
+3. Switch Smart Home on (dashboard) and map the device to a gesture.
+
+By default the command is only sent after a thumbs-up confirmation. The webhook is a
+one-way trigger: TouchlessX does not know the device's state. Devices that only work
+through a manufacturer's app (for example Xiaomi Mi Home cameras) need a hub that
+supports them first, such as Home Assistant with its Xiaomi integration; what can be
+controlled then depends on the model.
 
 ### Menu-bar icon, start at login and updates
 All under **Settings → Startup and updates**:
@@ -322,8 +408,8 @@ user must then allow the camera (and microphone, for voice) and add TouchlessX u
 Accessibility. The AI assistant additionally needs Ollama installed on that Mac.
 
 ### Changing how it looks
-**Settings → Appearance:** dark or light theme, and an accent colour from eight presets
-or any colour you pick.
+**Settings → Appearance:** dark, JARVIS (deep navy with cyan edges) or light theme, and
+an accent colour from eight presets or any colour you pick. The theme changes at once.
 
 ---
 
@@ -336,6 +422,9 @@ or any colour you pick.
 | Emergency stop gesture | One gesture of your choice that stops everything in every profile |
 | "Computer, stop everything" | The same, by voice |
 | Lock / unlock | In the GestureAI profile a fist locks control and a thumbs-up unlocks |
+| Fist / both palms | In the JARVIS profile a fist is an emergency stop and both palms resume |
+| Long blink | In Face Control, both eyes closed for about a second pause and resume |
+| Tracking lost | A drag in progress is released, so nothing stays held down |
 | Practice mode | Gestures and voice are recognised and shown, but nothing is sent |
 | Mini controller | A small always-on-top window with a Pause button |
 | Stop Camera | Turns tracking off completely |
@@ -349,6 +438,8 @@ The emergency stop also blocks voice commands, except "resume".
 | Screen | Contents |
 |---|---|
 | Dashboard | Live preview, current gesture, confidence, last action, feature switches, recent actions, analytics, system status |
+| Holo Desk | JARVIS workspace: camera, gesture ring, system controls, movable panels, dock, gesture cards |
+| Learn | The guided lesson |
 | Gesture Studio | Practice area, gesture → action mapping, per-gesture on/off and tuning, sensitivity |
 | Training Studio | Record, train and evaluate your own gestures |
 | System Controls | Cursor, scrolling, drag, shortcuts, applications, calibration, permission status |
@@ -356,9 +447,10 @@ The emergency stop also blocks voice commands, except "resume".
 | Smart Home | Webhook devices and confirmation |
 | AI Insights | Usage, recognition quality, suggestions, model history |
 | Voice | Voice and assistant switches, what was heard, what you can say |
+| Face Control | Hands-free mode: expressions, actions, sensitivity, cursor style, live meters |
 | Clipboard | Text gestures and clipboard history |
 | Profiles | Manage, import and export profiles |
-| Settings | Appearance, camera, emergency stop gesture, privacy and data |
+| Settings | Appearance (theme, accent), camera, controlling hand, emergency stop gesture, startup and updates, privacy and data |
 
 ---
 
@@ -382,8 +474,9 @@ The emergency stop also blocks voice commands, except "resume".
 None of these are published with the code. History and logs can be switched off and
 cleared in Settings.
 
-The only network use is: one-time model downloads, smart-home webhooks you add
-yourself, and opening the web pages you ask for.
+The only network use is: one-time model downloads (hand, face, speech), the update
+check (can be switched off), smart-home webhooks you add yourself, and opening the web
+pages you ask for.
 
 ---
 
@@ -392,7 +485,8 @@ yourself, and opening the web pages you ask for.
 | Purpose | Library |
 |---|---|
 | Camera | OpenCV |
-| Hand landmarks | MediaPipe (pinned to 0.10.21 or older) |
+| Hand and face landmarks | MediaPipe Hand Landmarker and Face Landmarker (pinned to 0.10.21 or older) |
+| Window management | macOS Accessibility API through PyObjC |
 | Maths | NumPy |
 | Mouse and keyboard | PyAutoGUI, plus macOS Quartz and Accessibility |
 | Interface | CustomTkinter |
@@ -422,11 +516,18 @@ TouchlessX/
 ├── docs/
 │   ├── PROJECT_DOCUMENTATION.md   This file
 │   ├── USER_GUIDE.md              Detailed how-to for users
-│   └── QA_CHECKLIST.md            Manual test list
+│   ├── QA_CHECKLIST.md            Manual test list
+│   ├── DEMO_VIDEO_SCRIPT.md       Shot list for a demo video
+│   └── screenshots/
 ├── src/
 │   ├── camera.py             Webcam frames
 │   ├── hand_tracker.py       Hand landmarks
 │   ├── gesture_engine.py     Gesture recognition
+│   ├── face_control.py       Face tracking, head pointer, expressions
+│   ├── tutorial.py           The Learn page's lesson
+│   ├── window_manager.py     Move, resize and snap other apps' windows
+│   ├── virtual_keyboard.py   Keyboard layout and the key under the cursor
+│   ├── system_stats.py       CPU, memory and battery figures
 │   ├── custom_gestures.py    Landmark features for trained gestures
 │   ├── training.py           Dataset, training, evaluation, model versions
 │   ├── action_controller.py  Gesture → action, cursor filter, scrolling, OS input
@@ -442,19 +543,25 @@ TouchlessX/
 │   ├── colors.py             Accent colour
 │   ├── system.py             Data folder, start at login, update check, menu-bar icon
 │   ├── ui.py                 Main window, dashboard, background threads
-│   ├── ui_pages.py           All other screens
+│   ├── ui_pages.py           Most other screens
+│   ├── ui_holo.py            The Holo Desk
+│   ├── ui_hud.py             HUD ring gauges
+│   ├── ui_keyboard.py        The virtual keyboard window
 │   └── ui_widgets.py         Colours and widget helpers
-└── tests/                    283 automated tests
+└── tests/                    333 automated tests
 ```
 
 ---
 
 ## 15. Testing
 
-**Automated (283 tests):** gesture rules, two-hand gestures, debouncing and hold times, cursor mapping,
-scrolling styles, double-click and drag, lock and emergency stop, profiles and import
-validation, keyboard shortcuts, training and model versions, voice commands, the
-assistant's understanding of requests, clipboard history, configuration. They need no
+**Automated (333 tests):** gesture rules, two-hand and one-hand zoom, debouncing and
+hold times, cursor mapping, scrolling styles, double-click and drag, lock and emergency
+stop, profiles and import validation, keyboard shortcuts, training and model versions,
+voice commands, the assistant's understanding of requests, clipboard history, the Learn
+lesson, Face Control (head steering, winks, expressions, scroll mode, pause), the virtual
+keyboard, window and desktop actions, the JARVIS profile and theme, system statistics,
+configuration. They need no
 camera, microphone or network.
 
 **Checked in other ways:**
@@ -468,9 +575,11 @@ camera, microphone or network.
 | Minimise / restore | On a real window on macOS |
 | Packaged Mac app | Built, then its self-test and window were run from the built app |
 | Menu-bar icon, start at login, update check | Driven through the running app; the update check was run live against GitHub |
+| Learn, Face Control and Holo Desk pages | Opened in the running app with a stand-in camera; panel drag and resize driven with simulated mouse events |
 
-**Not measured:** accuracy with different people, lighting, cameras or accents, and
-anything on Windows. `docs/QA_CHECKLIST.md` lists the manual tests for that.
+**Not measured:** accuracy with different people, faces, lighting, cameras or accents;
+Face Control, the virtual keyboard and window moving with a real person; anything on
+Windows. `docs/QA_CHECKLIST.md` lists the manual tests for that.
 
 ---
 
@@ -487,6 +596,11 @@ anything on Windows. `docs/QA_CHECKLIST.md` lists the manual tests for that.
 - The Mac app build is not code-signed, so macOS shows a warning the first time. There
   is no Windows build yet, and the menu-bar icon is macOS only.
 - The update check tells you about a new version; it does not install it.
+- Face Control has been tested with synthetic face data; how well each expression works
+  differs from face to face. Glasses with reflections and dim light make it less reliable.
+- Window moving and snapping are macOS only and do not work on full-screen windows.
+- Other applications' windows cannot be shown inside the Holo Desk; they are moved on
+  the real desktop instead.
 - Not for vehicles, medical devices, machinery or anything safety-critical.
 
 ### Not implemented
@@ -496,3 +610,6 @@ anything on Windows. `docs/QA_CHECKLIST.md` lists the manual tests for that.
 - Licensing or paid editions.
 - Cloud accounts or sync.
 - A Windows installer and a Windows system-tray icon.
+- Switching profiles automatically by application.
+- A direct Home Assistant connection (device list and state); smart home works through
+  webhooks.

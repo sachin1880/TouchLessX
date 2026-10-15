@@ -325,6 +325,24 @@ reverted. Samples are stored as normalised landmark coordinates in
 gesture's samples, and custom gestures are consulted only for poses the built-in rules
 don't already recognise. Gesture control is off while the Training Studio is open.
 
+## Smart home
+
+TouchlessX switches lights, plugs and other devices **through your smart-home hub** with
+webhooks — Home Assistant (free), IFTTT or Node-RED. Create a webhook in the hub, add
+it on the **Smart Home** page, press **Test**, switch Smart Home on and map it to a
+gesture. A **thumbs-up confirmation** is required by default, so a stray gesture can't
+switch anything. Webhooks are one-way (no device state). Devices that only work through
+their maker's app, such as Xiaomi Mi Home cameras, need a hub that supports them first
+(Home Assistant has a Xiaomi integration); what can be controlled depends on the model.
+
+## Control your iPhone
+
+macOS's built-in **iPhone Mirroring** shows your iPhone in a window controlled with the
+Mac's mouse and keyboard — so TouchlessX gestures work on the iPhone too: pinch to tap,
+hold the pinch and move to swipe, scroll with the scroll gesture, type with the virtual
+keyboard. Needs iOS 18 or newer, the same Apple ID on both devices, and a region where
+Apple offers it. TouchlessX itself does not run on the iPhone.
+
 ## Safety and stopping
 
 - The red **EMERGENCY STOP** button on the dashboard.

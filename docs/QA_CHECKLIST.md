@@ -94,11 +94,41 @@ OS version, hardware, camera and Python version with the results.
 - [ ] A disallowed key in a shortcut is rejected with a message.
 
 ## Interface
-- [ ] Every page opens in dark and light theme; text is readable in both.
+- [ ] Every page opens in dark, JARVIS and light theme; text is readable in all three.
 - [ ] Window at minimum size: nothing overlaps or is cut off.
 - [ ] Mini controller stays above other apps, shows the state, can be closed and
       re-enabled in Settings.
 - [ ] Main window minimised: gestures keep working; mini controller stays.
+
+## Learn
+- [ ] The lesson lists the active profile's gestures; each step completes when the
+      gesture is made, and moves on by itself.
+- [ ] Nothing is clicked during the lesson; leaving the page ends practice mode.
+
+## Face Control
+- [ ] Switching on downloads the face model once; the header shows FACE CONTROL and hand
+      gestures stop.
+- [ ] Slow head movement moves the cursor a little, quick movement crosses the screen.
+- [ ] Left wink clicks; two winks double-click; ordinary blinks do nothing.
+- [ ] Raised eyebrows right-click, puckered lips double-click, smile minimises.
+- [ ] Open mouth toggles scroll mode; looking up / down scrolls; open mouth again stops.
+- [ ] Both eyes closed for a second pauses and resumes.
+- [ ] Count accidental clicks over 5 minutes of normal use (talking, reading); record it.
+
+## JARVIS mode
+- [ ] JARVIS theme applies at once and back; the JARVIS profile appears for an existing user.
+- [ ] Holo Desk: grab a panel by its title bar with a held pinch, move it, drop it; it
+      snaps to the grid and is in the same place after a restart.
+- [ ] Resize a panel by its corner. Reset layout restores the defaults.
+- [ ] Hand lost while dragging a panel: it stays where it was; no mouse button stuck down.
+- [ ] System Info shows CPU, memory and battery; Files opens each folder; Music buttons work.
+- [ ] Virtual keyboard: keys light up under the cursor; a pinch types into the app in
+      front (e.g. a Safari search box) without bringing TouchlessX forward.
+- [ ] Shift capitalises one letter; a held pinch types one key, not many.
+- [ ] Three fingers held move the front window; snap left / right / maximise work;
+      full-screen windows are left alone.
+- [ ] Flick left / right with an open palm changes desktop (Mission Control shortcuts on).
+- [ ] Thumb + index "L": spreading zooms in, closing zooms out, closing fully never clicks.
 
 ## Privacy
 - [ ] No image or video file is created anywhere under the project folder.
