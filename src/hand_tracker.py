@@ -41,7 +41,7 @@ class HandResult:
     other: "HandResult | None" = None  # a second hand in view, for two-hand gestures
 
 
-def ensure_model(path: Path) -> Path:
+def ensure_model(path: Path, url: str = MODEL_URL, what: str = "hand-tracking", size: str = "~8 MB") -> Path:
     """Returns the local model file, downloading it once if it isn't there yet.
 
     Only the model file is fetched - no camera data ever leaves the machine.
@@ -51,13 +51,13 @@ def ensure_model(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_suffix(".part")
     try:
-        with urllib.request.urlopen(MODEL_URL, timeout=30) as response, open(partial, "wb") as f:
+        with urllib.request.urlopen(url, timeout=30) as response, open(partial, "wb") as f:
             shutil.copyfileobj(response, f)
         partial.replace(path)
     except OSError as exc:
         raise TrackerError(
-            "Could not download the hand-tracking model (one-time, ~8 MB).\n"
-            f"Check your internet connection, or download it manually:\n{MODEL_URL}\n"
+            f"Could not download the {what} model (one-time, {size}).\n"
+            f"Check your internet connection, or download it manually:\n{url}\n"
             f"and save it as:\n{path}\n({exc})"
         ) from exc
     return path

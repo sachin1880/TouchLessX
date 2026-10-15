@@ -269,6 +269,42 @@ the AI loads. Put your name under **Your name, for signing mails**. Choose wheth
 drafts open in Gmail or your mail app. The assistant runs entirely on this computer
 and cannot send mail, browse, or click through pages for you; read what it writes.
 
+## 8d. Face Control (hands-free)
+
+Open **Face Control** in the sidebar and switch on **Use Face Control**. The first time,
+the face model (about 4 MB) is downloaded once. While it is on, hand gestures do
+nothing; the header shows **🙂 FACE CONTROL**.
+
+| Do this | It does (default — change any of them on the page) |
+|---|---|
+| Move your head | Moves the cursor |
+| 😉 Wink your left eye | Click — two winks quickly = double-click |
+| 🤨 Raise your eyebrows | Right click |
+| 😗 Pucker your lips (kiss) | Double-click: opens a folder, file or link in one go |
+| 😄 Smile | Minimize the window in front |
+| 😮 Open your mouth | Scroll mode on / off — while on, look up or down to scroll (further = faster) |
+| 😌 Close both eyes for about a second | Pause / resume control |
+
+Each expression has an action menu, a live bar that fills as you make it (full = it
+acts), and a sensitivity slider under **Tuning**. The right-eye wink is unused by
+default; give it an action if you can wink that eye.
+
+Cursor style:
+- **Like a mouse (precise)**, the default: slow head movements move the cursor a little,
+  for small targets such as tabs; quick ones cross the screen. Nothing to recenter.
+- **Point with your head**: where you face is where the cursor goes. Press **Recenter**
+  while looking at the middle of the screen if it drifts.
+
+Tips:
+- Sit facing the camera with your face evenly lit, and hold still for a moment after
+  switching on.
+- The cursor holds still while you make an expression, so the click lands where you
+  aimed. Aim first, then make the expression.
+- Ordinary blinks are ignored: both eyes close together, which is not a wink.
+- If a bar fills by itself (for example while you talk or laugh), lower that
+  expression's sensitivity or set it to *No action*.
+- Glasses with reflections and dim light make eye detection less reliable.
+
 ## 8. Smart home
 
 Add a webhook URL from your hub and map the device to a gesture. Smart Home is off by

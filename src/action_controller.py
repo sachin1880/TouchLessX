@@ -164,6 +164,10 @@ class PyAutoGuiExecutor:
     def move_mouse(self, x: int, y: int) -> None:
         self._pyautogui.moveTo(x, y, _pause=False)
 
+    def position(self) -> tuple[int, int]:
+        """Where the cursor is now."""
+        return tuple(self._pyautogui.position())
+
     def click(self, button: str = "left") -> None:
         self._pyautogui.click(button=button)
 

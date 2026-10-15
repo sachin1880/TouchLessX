@@ -143,6 +143,7 @@ tracks for a few seconds and prints the measured frame rate. It sends no input.
 | **Smart Home** | Optional. Webhooks from a hub (Home Assistant, Node-RED, IFTTT, …) mapped to gestures, with thumbs-up confirmation. Off by default. |
 | **AI Insights** | Usage from the local history, recognition quality, rule-based suggestions, clear-history, model training history. |
 | **Voice** | Optional spoken commands after a wake word ("computer, scroll down slowly", "computer, change the tab", "computer, open google chrome"). Recognised offline on this computer. |
+| **Face Control** | Optional hands-free mode. The head moves the cursor (mouse-like with acceleration for precise targets, or absolute pointing); expressions are mapped to actions, each with a live meter and its own sensitivity: left wink = click (twice = double-click), raised eyebrows = right click, puckered lips = double-click, smile = minimize window, open mouth = scroll mode, eyes closed for a second = pause. Replaces hand gestures while on. |
 | **Clipboard** | Which gesture does copy / cut / paste / delete / select all / undo / redo, and an in-memory history of the last ten copied texts that can be put back or pasted by gesture. |
 | **Profiles** | Create, rename, duplicate, switch, import and export profiles. |
 | **Settings** | Dark / light theme, accent colour (eight presets or any colour you pick), mini controller, camera and resolution, mirror preview, controlling hand (left / right / either), emergency stop gesture, privacy and data retention, setup guide, versions. |
@@ -256,6 +257,7 @@ TouchlessX/
 │   ├── custom_gestures.py    # Landmark features + the distance check for trained poses
 │   ├── training.py           # Dataset (CSV), scikit-learn training, evaluation, model versions
 │   ├── tutorial.py           # The guided lesson on the Learn page: steps and progress
+│   ├── face_control.py       # Face Control: face tracker, head pointer, winks, blink pause, mouth scroll
 │   ├── action_controller.py  # Gesture -> action dispatch, cursor filter, shortcuts, OS input
 │   ├── safety.py             # Pause / emergency stop, lock, confidence gating
 │   ├── profiles.py           # Profile store, presets, import validation

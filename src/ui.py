@@ -27,7 +27,10 @@ from .camera import Camera, CameraError
 from .clipboard import ClipboardHistory
 from .config import DEFAULT_CONFIG, save_config
 from .custom_gestures import CustomGestureError, CustomGestureStore
-from .gesture_engine import BUILTIN_GESTURES, CUSTOM_PREFIX, OPTIONAL_GESTURES, GestureEngine, pinch_distance
+from .face_control import EXPRESSIONS, FACE_ACTIONS, POINTER_MODES, FaceDispatcher, FaceEngine, FaceTracker
+from .gesture_engine import (
+    BUILTIN_GESTURES, CUSTOM_PREFIX, OPTIONAL_GESTURES, GestureEngine, GestureEvent, pinch_distance,
+)
 from .hand_tracker import HandTracker, TrackerError
 from .history import History
 from .profiles import PROFILE_KEYS, ProfileError, ProfileStore, clean_name
@@ -59,6 +62,7 @@ NAV_ITEMS = [
     ("Smart Home", "IoT Device Control", "⌂"),
     ("AI Insights", "Usage & suggestions", "✦"),
     ("Voice", "Speak commands", "🎙"),
+    ("Face Control", "Head & eyes, no hands", "🙂"),
     ("Clipboard", "Copy, paste, history", "❐"),
     ("Profiles", "Work, Presentation, Media…", "▤"),
     ("Settings", "General & Privacy", "⚙"),
@@ -83,7 +87,7 @@ _ENGINE_KEYS = ("pinch_threshold", "swipe_min_distance", "swipe_max_duration", "
 _CONTROLLER_KEYS = ("cursor_smoothing", "cursor_dead_zone", "active_area_margin", "scroll_speed",
                     "drag_hold_seconds", "engage_seconds", "double_click_seconds")
 _RECORD_LIMIT = 300  # samples per recording run; it stops by itself there
-PREVIEW_PAGES = ("Dashboard", "Training Studio", "Learn")
+PREVIEW_PAGES = ("Dashboard", "Training Studio", "Learn", "Face Control")
 REST_EDGE = 0.98  # wrist this low in the frame = a resting hand (chosen from recorded real use)
 
 
@@ -144,6 +148,14 @@ class App(ctk.CTk):
             self.executor = NullExecutor()
             self._input_unavailable = True
         self.action_controller = ActionController(self.executor, self.safety, {}, smart_home=self.smart_home)
+        # Face Control: hands-free mode, used instead of the hand pipeline while it is on.
+        self.face_model_path = root / "assets" / "models" / "face_landmarker.task"
+        self.face_engine = FaceEngine()
+        self.face_dispatcher = FaceDispatcher(self.action_controller, self.safety)
+        self._face_mode = False
+        self._face_tracker: FaceTracker | None = None  # created on the worker thread when first needed
+        self.last_face_event = None
+        self.face_error = ""
         # Called on the worker thread, so it only posts a message for the UI thread.
         self.action_controller.callbacks["show_app"] = lambda: self._events.put(("show_window",))
         self.executor.own_window_handler = lambda what: self._events.put(("own_window", what))
@@ -240,6 +252,7 @@ class App(ctk.CTk):
         self.action_log.enabled = bool(config["action_log_enabled"])
         self.frame_log.enabled = bool(config["action_log_enabled"])
         self._show_landmarks = bool(config["show_landmarks"])
+        self._apply_face()
         self._loading = True  # syncing the switches to the config is not a change to save
         for key, var in self.toggle_vars.items():
             var.set(bool(config["enabled"].get(key, False)))
@@ -339,6 +352,74 @@ class App(ctk.CTk):
         else:
             self.config_data["shortcuts"][name] = keys
         self._schedule_save()
+
+    # ----------------------------------------------------------- face control
+    def _apply_face(self) -> None:
+        face = self.config_data["face"]
+        self.face_engine.wink_threshold = face["wink_threshold"]
+        self.face_engine.long_blink_seconds = face["long_blink_seconds"]
+        self.face_engine.scroll_speed = face["scroll_speed"]
+        expressions = face["expressions"]
+        self.face_engine.actions = {name: expressions.get(name, {}).get("action", "none") for name in EXPRESSIONS}
+        for name, action in self.face_engine.actions.items():
+            if action not in FACE_ACTIONS:
+                self.face_engine.actions[name] = "none"  # the config file is editable
+        self.face_engine.thresholds = {name: float(expressions.get(name, {}).get("threshold", 0.6))
+                                       for name in EXPRESSIONS}
+        self.face_dispatcher.smoothing = face["smoothing"]
+        self.face_dispatcher.gain = face["gain"]
+        self.face_dispatcher.pointer_mode = face["pointer_mode"] if face["pointer_mode"] in POINTER_MODES \
+            else "relative"
+        on = bool(self.config_data["face_control"])
+        if on != self._face_mode:
+            self.action_controller.release()
+            self.gesture_engine.reset()
+            self.face_engine.reset()
+            self._face_mode = on
+        if hasattr(self, "face_badge"):
+            if on:
+                self.face_badge.pack(side="right", padx=8, before=self.camera_button)
+            else:
+                self.face_badge.pack_forget()
+
+    def set_face_control(self, on: bool) -> None:
+        self.config_data["face_control"] = bool(on)
+        self._apply_face()
+        self._schedule_save()
+
+    def set_face_setting(self, key: str, value: float) -> None:
+        self.config_data["face"][key] = value
+        self._apply_face()
+        self._schedule_save()
+
+    def set_face_expression(self, name: str, key: str, value) -> None:
+        """`key` is "action" or "threshold"."""
+        self.config_data["face"]["expressions"].setdefault(name, {})[key] = value
+        self._apply_face()
+        self._schedule_save()
+
+    def face_recenter(self) -> None:
+        self.face_engine.recenter()
+
+    def _face_step(self, frame, now: float):
+        """One frame of Face Control, on the worker thread: (face, event, dispatch)."""
+        if self._face_tracker is None:
+            try:
+                self._face_tracker = FaceTracker(self.face_model_path)
+            except TrackerError as exc:
+                self._face_mode = False  # back to hands from the next frame; the UI thread tidies up
+                self._events.put(("face_error", str(exc)))
+                return None, GestureEvent("none", 0.0, None, None, False), None
+        face = self._face_tracker.process(frame)
+        face_event = self.face_engine.update(face, now)
+        self.last_face_event = face_event
+        self.face_dispatcher.neutral = self.face_engine.neutral
+        try:
+            dispatch = self.face_dispatcher.dispatch(face_event, now)
+        except Exception:
+            dispatch = None  # an OS input hiccup must not take tracking down with it
+        event = GestureEvent(face_event.name, 100.0 if face is not None else 0.0, None, None, face_event.trigger)
+        return face, event, dispatch
 
     def set_practice(self, on: bool) -> None:
         """Practice mode: gestures are recognised and shown, but nothing is sent."""
@@ -947,6 +1028,8 @@ class App(ctk.CTk):
         self.pause_button.pack(side="right", padx=(8, 20))
         self.camera_button = button(header, "Stop Camera", self._toggle_tracking, "ghost", 120)
         self.camera_button.pack(side="right", padx=8)
+        self.face_badge = label(header, "🙂  FACE CONTROL", 11, True, color=GREEN, fg_color=PANEL_ALT,
+                                corner_radius=8, width=130, height=30)  # packed only while Face Control is on
         self.practice_badge = label(header, "PRACTICE MODE", 11, True, color=AMBER, fg_color=PANEL_ALT,
                                     corner_radius=8, width=120, height=30)  # packed only while practising
         # Shown only while gesture control is locked; clicking it unlocks without any gesture.
@@ -980,15 +1063,15 @@ class App(ctk.CTk):
 
         self._nav: dict[str, tuple] = {}
         for i, (name, subtitle, glyph) in enumerate(NAV_ITEMS):
-            item = ctk.CTkFrame(sidebar, fg_color="transparent", corner_radius=10, height=44)
-            item.pack(fill="x", padx=12, pady=(10 if i == 0 else 1, 1))
+            item = ctk.CTkFrame(sidebar, fg_color="transparent", corner_radius=10, height=40)
+            item.pack(fill="x", padx=12, pady=(8 if i == 0 else 1, 1))
             item.pack_propagate(False)
             icon = label(item, glyph, 17, color=TEXT_DIM, width=30)
             icon.pack(side="left", padx=(10, 6))
             text = ctk.CTkFrame(item, fg_color="transparent")
             text.pack(side="left", fill="x", expand=True)
             title = label(text, name, 13, True, color=TEXT_DIM, anchor="w", height=18)
-            title.pack(anchor="w", pady=(7, 0))
+            title.pack(anchor="w", pady=(5, 0))
             sub = label(text, subtitle, 10, color=TEXT_DIM, anchor="w", height=14)
             sub.pack(anchor="w")
             _bind_click(item, lambda n=name: self.show_page(n))
@@ -1292,15 +1375,20 @@ class App(ctk.CTk):
             started = time.monotonic()
             frame_times.append(started)
 
-            tracker.preferred_hand = self._preferred_hand
-            result = tracker.process(frame)
-            event = self.gesture_engine.update(result, started)
-            if self._current_page == "Learn":
-                self._events.put(("lesson", event, started))  # every frame: a flick lasts only one
-            try:
-                dispatch = self.action_controller.dispatch(event)
-            except Exception:
-                dispatch = None  # an OS input hiccup must not take tracking down with it
+            face = None
+            if self._face_mode:
+                result = None
+                face, event, dispatch = self._face_step(frame, started)
+            else:
+                tracker.preferred_hand = self._preferred_hand
+                result = tracker.process(frame)
+                event = self.gesture_engine.update(result, started)
+                if self._current_page == "Learn":
+                    self._events.put(("lesson", event, started))  # every frame: a flick lasts only one
+                try:
+                    dispatch = self.action_controller.dispatch(event)
+                except Exception:
+                    dispatch = None  # an OS input hiccup must not take tracking down with it
             latency_ms = (time.monotonic() - started) * 1000.0
 
             fps = 0.0
@@ -1334,6 +1422,8 @@ class App(ctk.CTk):
                     tracker.draw(frame, result)
                     if result.other is not None:
                         tracker.draw(frame, result.other)
+                if face is not None and self._show_landmarks:
+                    FaceTracker.draw(frame, face, self.last_face_event, self.face_engine.wink_threshold)
                 guide = self.action_controller.scroll_guide(event)
                 if guide is not None:
                     # The neutral zone of glide scrolling: hand inside = stopped, outside = scrolling.
@@ -1422,6 +1512,12 @@ class App(ctk.CTk):
             page = self._pages.get("Learn")
             if page is not None and self._current_page == "Learn":
                 page.on_lesson_event(*data)
+        elif kind == "face_error":
+            self.face_error = data[0]  # shown on the Face Control page; hand control carries on
+            self.set_face_control(False)
+            page = self._pages.get("Face Control")
+            if page is not None:
+                page.rebuild()
         elif kind == "recorded":
             self.stop_recording()
         elif kind == "update_checked":

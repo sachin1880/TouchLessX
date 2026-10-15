@@ -20,6 +20,7 @@ from .custom_gestures import CustomGestureError
 from .gesture_engine import CUSTOM_PREFIX
 from .training import MIN_SAMPLES_TO_TRAIN, TrainingError
 from .tutorial import Lesson, build_steps
+from .face_control import EXPRESSIONS, FACE_ACTIONS, POINTER_MODES
 from .profiles import ProfileError
 from .smart_home import SmartHomeError
 from .system import is_packaged
@@ -1691,6 +1692,146 @@ class LearnPage(Page):
         self.rebuild()  # keeps the place in the lesson unless the profile's gestures changed
 
 
+class FaceControlPage(Page):
+    title = "Face Control"
+    subtitle = "Hands-free: your head moves the cursor, your expressions click. Replaces hand gestures while on."
+
+    def build(self) -> None:
+        app = self.app
+        face = app.config_data["face"]
+        box = self.section("Face Control", "While this is on, hand gestures do nothing - the two would fight "
+                                           "over the cursor. Space, Esc, Pause and EMERGENCY STOP still work.")
+        self._on = ctk.BooleanVar(value=bool(app.config_data["face_control"]))
+        self._on.trace_add("write", lambda *_: self._toggle(self._on.get()))
+        switch_row(box, "Use Face Control", "The first time, the face model (about 4 MB) is downloaded once. "
+                                            "Camera frames stay on this computer.", self._on)
+        if app.face_error:
+            self.note(box, f"● {app.face_error}", RED)
+        self.end(box)
+
+        row = ctk.CTkFrame(self.body, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=4)
+        row.grid_columnconfigure(0, weight=3, uniform="face")
+        row.grid_columnconfigure(1, weight=2, uniform="face")
+        camera = card(row)
+        camera.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self.preview_panel = ctk.CTkFrame(camera, fg_color=PANEL_ALT, corner_radius=10, height=330)
+        self.preview_panel.pack(fill="both", expand=True, padx=14, pady=14)
+        self.preview_panel.pack_propagate(False)
+        self.preview_label = ctk.CTkLabel(self.preview_panel, text="Waiting for the camera…", text_color=TEXT_DIM)
+        self.preview_label.pack(fill="both", expand=True)
+
+        live = card(row)
+        live.grid(row=0, column=1, sticky="nsew")
+        label(live, "Live", 15, True).pack(anchor="w", padx=18, pady=(14, 4))
+        self._state = label(live, "", 13, True, justify="left", wraplength=320)
+        self._state.pack(anchor="w", padx=18, pady=(0, 8))
+        self.note(live, "• Close both eyes for about a second to pause or resume.\n"
+                        "• The cursor holds still while you make an expression, so the click lands where "
+                        "you aimed.\n"
+                        "• In scroll mode, look up or down - further = faster. Do the scroll expression "
+                        "again to leave it.")
+        ctk.CTkFrame(live, fg_color="transparent", height=10).pack()
+
+        box = self.section("Expressions", "Choose what each expression does. A bar fills as you make it; full "
+                                          "= it acts. If a bar fills by itself, lower that expression's "
+                                          "sensitivity under Tuning.")
+        actions = {label_: key for key, label_ in FACE_ACTIONS.items()}
+        expressions = face["expressions"]
+        self._meters: dict[str, ctk.CTkProgressBar] = {}
+        for name, (title, _) in EXPRESSIONS.items():
+            line = ctk.CTkFrame(box, fg_color=PANEL_ALT, corner_radius=8)
+            line.pack(fill="x", padx=18, pady=3)
+            label(line, gesture_glyph(name), 18, width=34).pack(side="left", padx=(8, 0), pady=6)
+            label(line, title, 12, True, width=170, anchor="w").pack(side="left", padx=6)
+            current = expressions.get(name, {}).get("action", "none")
+            option_menu(line, list(actions), FACE_ACTIONS.get(current, "No action"),
+                        lambda chosen, n=name: self.app.set_face_expression(n, "action", actions[chosen]),
+                        200).pack(side="right", padx=8)
+            meter = ctk.CTkProgressBar(line, progress_color=GREEN, fg_color=TRACK, height=8)
+            meter.pack(side="left", fill="x", expand=True, padx=(6, 12))
+            meter.set(0.0)
+            self._meters[name] = meter
+        self.end(box)
+
+        box = self.section("Moving the cursor")
+        modes = {label_: key for key, label_ in POINTER_MODES.items()}
+        line = ctk.CTkFrame(box, fg_color="transparent")
+        line.pack(fill="x", padx=18, pady=4)
+        label(line, "Style", 13, True).pack(side="left")
+        option_menu(line, list(modes), POINTER_MODES.get(face["pointer_mode"], POINTER_MODES["relative"]),
+                    lambda chosen: app.set_face_setting("pointer_mode", modes[chosen])).pack(side="right")
+        self.note(box, "Like a mouse: slow head movements move the cursor a little (for small targets such as "
+                       "tabs), quick ones cross the screen. Point with your head: where you face is where the "
+                       "cursor goes - press Recenter while looking at the middle of the screen if it drifts.")
+        slider_row(box, "Cursor speed", "How far the cursor travels for a movement of the head.",
+                   face["gain"], 1.0, 6.0, lambda v: app.set_face_setting("gain", round(v, 2)), "{:.1f}×")
+        slider_row(box, "Smoothing", "Higher = steadier cursor, a little slower to follow.",
+                   face["smoothing"], 0.0, 0.9, lambda v: app.set_face_setting("smoothing", round(v, 2)), "{:.2f}")
+        button(box, "Recenter", app.face_recenter, "ghost", 120).pack(anchor="w", padx=18, pady=(6, 0))
+        self.end(box)
+
+        box = self.section("Tuning", "Sensitivity: higher = the expression acts more easily, but also by "
+                                     "accident more often.")
+        slider_row(box, "Wink sensitivity", "How far an eye must close to count as a wink.",
+                   face["wink_threshold"], 0.35, 0.75,
+                   lambda v: app.set_face_setting("wink_threshold", round(v, 2)), "{:.2f}")
+        for name, (title, shapes) in EXPRESSIONS.items():
+            if not shapes:
+                continue
+            threshold = float(expressions.get(name, {}).get("threshold", 0.6))
+            # The slider shows sensitivity (1 - the score needed), so right = easier, like the others.
+            slider_row(box, f"{title} sensitivity", "", 1.0 - threshold, 0.1, 0.9,
+                       lambda v, n=name: app.set_face_expression(n, "threshold", round(1.0 - v, 2)), "{:.2f}")
+        slider_row(box, "Pause blink", "How long both eyes must stay closed to pause or resume.",
+                   face["long_blink_seconds"], 0.5, 2.0,
+                   lambda v: app.set_face_setting("long_blink_seconds", round(v, 2)), "{:.1f}s")
+        slider_row(box, "Scroll speed", "", face["scroll_speed"], 0.3, 3.0,
+                   lambda v: app.set_face_setting("scroll_speed", round(v, 2)), "{:.1f}×")
+        self.end(box)
+        self._refresh()
+
+    def _toggle(self, on: bool) -> None:
+        self.app.face_error = ""
+        self.app.set_face_control(on)
+
+    def _refresh(self) -> None:
+        if not self._state.winfo_exists():
+            return  # rebuilt: the new build runs its own loop
+        if self.winfo_ismapped():
+            app, event = self.app, self.app.last_face_event
+            engine = app.face_engine
+            if not app.config_data["face_control"]:
+                text, colour = "Face Control is off - switch it on above.", TEXT_DIM
+            elif not app.camera_running:
+                text, colour = "The camera is off - press Start Camera in the header.", AMBER
+            elif event is None or event.name == "none":
+                text, colour = "I can't see a face. Sit in front of the camera, face lit.", AMBER
+            elif event.calibrating:
+                text, colour = "Hold still - finding the centre…", AMBER
+            elif app.safety.paused:
+                text, colour = "Paused - close both eyes for a moment to resume.", AMBER
+            elif event.scroll_mode:
+                text, colour = "↕  Scroll mode - look up or down", ACCENT
+            else:
+                text, colour = "🙂 Tracking - move your head", GREEN
+            self._state.configure(text=text, text_color=colour)
+            if event is not None and event.name != "none" and not event.calibrating:
+                for name, meter in self._meters.items():
+                    if name in ("left_wink", "right_wink"):
+                        level = event.eyes[0 if name == "left_wink" else 1]
+                        fill = (1.0 - level) / max(0.05, 1.0 - engine.wink_threshold)
+                    else:
+                        fill = event.scores.get(name, 0.0) / max(0.05, engine.thresholds.get(name, 0.6))
+                    fill = max(0.0, min(1.0, fill))
+                    meter.set(fill)
+                    meter.configure(progress_color=ACCENT if fill >= 1.0 else GREEN)
+        self.after(120, self._refresh)
+
+    def on_show(self) -> None:
+        self.rebuild()
+
+
 class OnboardingPage(Page):
     title = "Getting Started"
     subtitle = "Four things to know before you let your hand take over."
@@ -1784,4 +1925,5 @@ PAGES = {
     "Settings": SettingsPage,
     "Getting Started": OnboardingPage,
     "Learn": LearnPage,
+    "Face Control": FaceControlPage,
 }

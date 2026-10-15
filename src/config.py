@@ -90,6 +90,25 @@ DEFAULT_CONFIG = {
         "ai_assistant": False,
     },
     "mappings": dict(DEFAULT_MAPPINGS),
+    # Face Control (face_control.py): hands-free mode, replaces hand gestures while on.
+    "face_control": False,
+    "face": {
+        "gain": 3.0,                 # cursor travel per head turn
+        "smoothing": 0.6,
+        "wink_threshold": 0.55,      # an eye is shut below this share of its normal opening
+        "long_blink_seconds": 0.8,   # both eyes shut this long = pause / resume
+        "scroll_speed": 1.0,
+        "pointer_mode": "relative",  # "relative" (like a mouse) or "absolute" (head points)
+        # Expression -> action, and for the scored ones the score (0..1) that counts.
+        "expressions": {
+            "left_wink": {"action": "left_click"},
+            "right_wink": {"action": "none"},
+            "raise_brows": {"action": "right_click", "threshold": 0.5},
+            "pucker": {"action": "double_click", "threshold": 0.6},
+            "mouth_open": {"action": "scroll_mode", "threshold": 0.35},
+            "smile": {"action": "minimize_window", "threshold": 0.6},
+        },
+    },
 }
 
 
