@@ -5,6 +5,16 @@ your hand, recognizes a small set of deliberate gestures, and maps them to mouse
 movement, clicks, scrolling, media control, and presentation navigation. Everything
 runs locally — no cloud account, no video stored or uploaded.
 
+## Screenshots
+
+![Dashboard: live camera preview, current gesture, quick controls and system status](docs/screenshots/dashboard.png)
+
+| Gesture Studio | Voice |
+|---|---|
+| ![Gesture Studio: practice mode and gesture-to-action mapping](docs/screenshots/gesture-studio.png) | ![Voice: wake word, voice commands and the local assistant](docs/screenshots/voice.png) |
+| **Profiles** | **Settings** |
+| ![Profiles: switch, rename, duplicate, export or delete profiles](docs/screenshots/profiles.png) | ![Settings: theme, accent colour, camera and preview options](docs/screenshots/settings.png) |
+
 ## Gesture map (Default profile)
 
 | Gesture | Action | Category |
