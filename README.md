@@ -14,6 +14,12 @@ profile, one at a time, with the camera checking each one. Nothing is clicked wh
 
 ![Learn: a guided lesson with live camera preview and one gesture per step](docs/screenshots/learn.png)
 
+**Hands-free?** Turn on **Face Control**: your head moves the cursor and facial expressions
+click — wink to click, raise your eyebrows to right-click, pucker your lips to open, open your
+mouth to scroll. Each expression has a live meter, an action you choose and its own sensitivity.
+
+![Face Control: camera preview, live status and the expression-to-action list](docs/screenshots/face-control.png)
+
 | Gesture Studio | Voice |
 |---|---|
 | ![Gesture Studio: practice mode and gesture-to-action mapping](docs/screenshots/gesture-studio.png) | ![Voice: wake word, voice commands and the local assistant](docs/screenshots/voice.png) |

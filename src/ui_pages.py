@@ -1726,11 +1726,12 @@ class FaceControlPage(Page):
         label(live, "Live", 15, True).pack(anchor="w", padx=18, pady=(14, 4))
         self._state = label(live, "", 13, True, justify="left", wraplength=320)
         self._state.pack(anchor="w", padx=18, pady=(0, 8))
-        self.note(live, "• Close both eyes for about a second to pause or resume.\n"
-                        "• The cursor holds still while you make an expression, so the click lands where "
-                        "you aimed.\n"
-                        "• In scroll mode, look up or down - further = faster. Do the scroll expression "
-                        "again to leave it.")
+        label(live, "•  Close both eyes for about a second to pause or resume.\n"
+                    "•  The cursor holds still while you make an expression, so the click lands where "
+                    "you aimed.\n"
+                    "•  In scroll mode, look up or down - further = faster. Do the scroll expression "
+                    "again to leave it.", 11, color=TEXT_DIM, justify="left", wraplength=320,
+              ).pack(anchor="w", padx=18, pady=(2, 0))
         ctk.CTkFrame(live, fg_color="transparent", height=10).pack()
 
         box = self.section("Expressions", "Choose what each expression does. A bar fills as you make it; full "
