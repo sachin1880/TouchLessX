@@ -305,6 +305,41 @@ Tips:
   expression's sensitivity or set it to *No action*.
 - Glasses with reflections and dim light make eye detection less reliable.
 
+## 8e. JARVIS mode
+
+1. **Settings → Theme → JARVIS (cyan HUD)** for the look.
+2. Choose the **JARVIS** profile in the header for the gestures below.
+3. Open **Holo Desk** in the sidebar.
+
+| Gesture (JARVIS profile) | Action |
+|---|---|
+| Point | Move the cursor |
+| Pinch | Click; hold to grab and drag; open the fingers to drop |
+| Two quick pinches | Double-click |
+| Open palm | Rest — the cursor stays still |
+| Flick left / right with an open palm | Previous / next desktop |
+| Flick up / down with an open palm | Scroll up / down |
+| Thumb + index "L", spread / close | Zoom in / out |
+| Two fingers | Right click |
+| Three fingers held, then move | Move the front app window |
+| Fist | Emergency stop |
+| Both palms | Pause / resume (also after an emergency stop) |
+
+**Moving Holo Desk panels:** point at a panel's title bar, pinch, keep pinching and move
+your hand, then open your fingers. Drag the ◢ corner to resize. The layout is saved;
+**Reset layout** restores it.
+
+**Virtual keyboard:** open it with the ⌨ button (Holo Desk, its dock) or a gesture mapped
+to *Show / Hide Keyboard*. Point at a key and pinch. It types into the app you were
+using — click into a text field first (with a pinch), then type. ⇧ capitalises the next
+key. One pinch types one key.
+
+**Windows and desktops:** map *Move Window*, *Resize Window*, *Window to Left / Right
+Half*, *Maximize Window*, *Center Window*, *Next / Previous Desktop* or *Mission Control*
+to any gesture in Gesture Studio. Desktop switching needs System Settings → Keyboard →
+Keyboard Shortcuts → Mission Control → "Move left / right a space" switched on.
+Full-screen windows can't be moved.
+
 ## 8. Smart home
 
 Add a webhook URL from your hub and map the device to a gesture. Smart Home is off by

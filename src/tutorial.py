@@ -14,7 +14,7 @@ from .gesture_engine import CUSTOM_PREFIX, GestureEvent
 TEACHING_ORDER = (
     "open_palm", "point", "pinch", "two_fingers", "three_fingers", "fist", "thumbs_up", "hand_open",
     "swipe_left", "swipe_right", "swipe_up", "swipe_down", "point_left", "point_right",
-    "two_hand_pinch", "both_palms",
+    "thumb_index", "two_hand_pinch", "both_palms",
 )
 
 # How to make each gesture, in words a first-time user can follow.
@@ -35,6 +35,7 @@ HOW = {
     "point_right": "Point your index finger sideways, to the right.",
     "two_hand_pinch": "Raise both hands and pinch with both at the same time.",
     "both_palms": "Raise both hands, palms open towards the camera, and hold them still.",
+    "thumb_index": "Make an L: index finger up, thumb out to the side, other fingers curled.",
 }
 
 # What to do while a held pose is active, for the continuous actions.
@@ -42,7 +43,7 @@ MOVE_HINT = {
     "move_cursor": "Keep the pose and move your hand around - the cursor follows it.",
     "scroll": "Keep the pose and move your hand up and down - the page follows it.",
     "volume": "Keep the pose and move your hand up (louder) and down (quieter).",
-    "zoom": "Keep pinching and move your hands apart (zoom in) and together (zoom out).",
+    "zoom": "Keep the pose and spread apart (zoom in), then bring together (zoom out).",
 }
 # How far the hand must travel, in frame widths, before a movement step counts.
 MOVE_TARGET = {"move_cursor": 0.6, "scroll": 0.4, "volume": 0.4, "zoom": 0.25}

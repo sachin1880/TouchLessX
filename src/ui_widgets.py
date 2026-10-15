@@ -8,11 +8,13 @@ from .gesture_engine import CUSTOM_PREFIX
 
 # Every colour is a (light theme, dark theme) pair; CustomTkinter picks the right one
 # and re-colours widgets when the theme changes. Use `resolve` for plain Tk widgets.
-BG = ("#eef2f8", "#070c18")
-PANEL = ("#ffffff", "#0f182b")
-PANEL_ALT = ("#f1f5fb", "#0a1221")
-BORDER = ("#d3dbe8", "#1c2942")
-TRACK = ("#c9d3e3", "#2a3550")
+# The surface colours are lists so `set_jarvis` can recolour them in place, as
+# `set_accent` does for the accent.
+BG = ["#eef2f8", "#070c18"]
+PANEL = ["#ffffff", "#0f182b"]
+PANEL_ALT = ["#f1f5fb", "#0a1221"]
+BORDER = ["#d3dbe8", "#1c2942"]
+TRACK = ["#c9d3e3", "#2a3550"]
 # The accent colours are lists, not tuples, because the user can change them: every
 # widget keeps a reference to these same lists, so `set_accent` updates them in place
 # and a redraw is all it takes for the whole interface to follow.
@@ -24,11 +26,25 @@ GREEN = ("#0e9467", "#27d79a")
 RED = ("#d6363c", "#ff5a5f")
 AMBER = ("#a86e00", "#f5a524")
 PURPLE = ("#7446d8", "#8b5cf6")
-TEXT = ("#152033", "#e8edf5")
-TEXT_DIM = ("#5a6679", "#8794ab")
+TEXT = ["#152033", "#e8edf5"]
+TEXT_DIM = ["#5a6679", "#8794ab"]
 DANGER_BG = ("#fde4e5", "#3a1820")
 DANGER_HOVER = ("#f9cdd0", "#5a222c")
 DANGER_TEXT = ("#b3262c", "#ff8a8e")
+
+
+# The JARVIS theme: the dark theme's surfaces turned to deep navy with cyan-lit edges.
+JARVIS_ACCENT = "#19d3ff"
+_JARVIS_DARK = {"BG": "#02070f", "PANEL": "#061424", "PANEL_ALT": "#08192c", "BORDER": "#0e5a7a",
+                "TRACK": "#12324a", "TEXT": "#dff7ff", "TEXT_DIM": "#7fb0c4"}
+_STANDARD_DARK = {name: globals()[name][1] for name in _JARVIS_DARK}
+
+
+def set_jarvis(on: bool) -> None:
+    """Switches the dark surfaces between the standard and the JARVIS look. Existing
+    widgets need a redraw afterwards, as after `set_accent`."""
+    for name, colour in (_JARVIS_DARK if on else _STANDARD_DARK).items():
+        globals()[name][1] = colour
 
 
 def set_accent(color) -> str:
@@ -69,6 +85,7 @@ GESTURE_INFO = {
     "point_right": ("Point Right", "👉"),
     "both_palms": ("Both Palms", "🙌"),
     "two_hand_pinch": ("Two-Hand Pinch", "🤏"),
+    "thumb_index": ("Thumb + Index (L)", "🤙"),
     "two_hands": ("Two Hands", "🙌"),
     "face": ("Face", "🙂"),
     "left_wink": ("Left Wink", "😉"),

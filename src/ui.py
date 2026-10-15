@@ -21,7 +21,7 @@ import customtkinter as ctk
 import cv2
 from PIL import Image
 
-from .action_controller import ActionController, NullExecutor, PyAutoGuiExecutor, continuous_poses
+from .action_controller import ActionController, DispatchResult, NullExecutor, PyAutoGuiExecutor, continuous_poses
 from .action_log import ActionLog, FrameLog, SessionStats, build_suggestions
 from .camera import Camera, CameraError
 from .clipboard import ClipboardHistory
@@ -33,7 +33,7 @@ from .gesture_engine import (
 )
 from .hand_tracker import HandTracker, TrackerError
 from .history import History
-from .profiles import PROFILE_KEYS, ProfileError, ProfileStore, clean_name
+from .profiles import LATER_BUILTINS, PROFILE_KEYS, ProfileError, ProfileStore, builtin_profiles, clean_name
 from .safety import SafetyGuard
 from .smart_home import SmartHomeClient
 from .system import RELEASES_PAGE, LoginItem, MenuBarIcon, check_for_update, launch_command, is_packaged
@@ -43,10 +43,14 @@ from .assistant import (
 )
 from .voice import Transcriber, VoiceListener, command_vocabulary, installed_apps, parse_command
 from .ui_pages import PAGES, action_label
+from .ui_holo import HoloDeskPage
+from .ui_keyboard import KeyboardWindow
+from .virtual_keyboard import KeyboardModel, key_label
+from .window_manager import WindowManager
 from .ui_widgets import (
-    ACCENT, ACCENT_HOVER, ACCENT_SOFT, AMBER, BG, BORDER, CATEGORIES, GREEN, ON_ACCENT, PANEL, PANEL_ALT, RED,
-    TEXT, TEXT_DIM, TRACK, button, card, gesture_glyph, gesture_label, label, option_menu, resolve, set_accent,
-    switch,
+    ACCENT, ACCENT_HOVER, ACCENT_SOFT, AMBER, BG, BORDER, CATEGORIES, GREEN, JARVIS_ACCENT, ON_ACCENT, PANEL,
+    PANEL_ALT, RED, TEXT, TEXT_DIM, TRACK, button, card, gesture_glyph, gesture_label, label, option_menu, resolve,
+    set_accent, set_jarvis, switch,
 )
 
 __version__ = "1.3.0"
@@ -54,6 +58,7 @@ __version__ = "1.3.0"
 # (page name, subtitle, glyph)
 NAV_ITEMS = [
     ("Dashboard", "Live overview", "⌂"),
+    ("Holo Desk", "JARVIS workspace", "◈"),
     ("Learn", "Guided gesture lesson", "🎓"),
     ("Gesture Studio", "Mappings, sensitivity, practice", "✋"),
     ("Training Studio", "Teach your own gestures", "◉"),
@@ -87,7 +92,8 @@ _ENGINE_KEYS = ("pinch_threshold", "swipe_min_distance", "swipe_max_duration", "
 _CONTROLLER_KEYS = ("cursor_smoothing", "cursor_dead_zone", "active_area_margin", "scroll_speed",
                     "drag_hold_seconds", "engage_seconds", "double_click_seconds")
 _RECORD_LIMIT = 300  # samples per recording run; it stops by itself there
-PREVIEW_PAGES = ("Dashboard", "Training Studio", "Learn", "Face Control")
+PREVIEW_PAGES = ("Dashboard", "Training Studio", "Learn", "Face Control", "Holo Desk")
+PAGES["Holo Desk"] = HoloDeskPage
 REST_EDGE = 0.98  # wrist this low in the frame = a resting hand (chosen from recorded real use)
 
 
@@ -110,7 +116,8 @@ class App(ctk.CTk):
         self.log_dir = root / "logs"
         self.model_path = root / "assets" / "models" / "hand_landmarker.task"
 
-        ctk.set_appearance_mode(config["theme"])
+        set_jarvis(config["theme"] == "jarvis")
+        ctk.set_appearance_mode("dark" if config["theme"] == "jarvis" else config["theme"])
         config["accent_color"] = set_accent(config["accent_color"])  # before any widget is built
         self.title("TouchlessX — Control Your World with Hand Gestures")
         width = min(1400, self.winfo_screenwidth() - 40)
@@ -134,6 +141,11 @@ class App(ctk.CTk):
             except ProfileError:
                 config["active_profile"] = "Default"
             self.profiles.set(config["active_profile"], config)
+        for name in LATER_BUILTINS:  # new built-in profiles reach existing users once
+            if name not in config["profiles_added"]:
+                config["profiles_added"].append(name)
+                if name not in self.profiles.profiles:
+                    self.profiles.set(name, builtin_profiles()[name])
         self.last_event = None
         self.mini: MiniController | None = None
         self._mini_gesture = "–"
@@ -148,6 +160,14 @@ class App(ctk.CTk):
             self.executor = NullExecutor()
             self._input_unavailable = True
         self.action_controller = ActionController(self.executor, self.safety, {}, smart_home=self.smart_home)
+        # Native window management (move / resize / snap the front window).
+        self.action_controller.window_manager = WindowManager()
+        # The virtual keyboard: a pinch over it types a key instead of clicking.
+        self.keyboard_model = KeyboardModel()
+        self.keyboard_window: KeyboardWindow | None = None
+        self.action_controller.callbacks["pointer_click"] = self._keyboard_click
+        self.action_controller.callbacks["pointer_blocked"] = self._over_keyboard
+        self.action_controller.callbacks["toggle_keyboard"] = lambda: self._events.put(("toggle_keyboard",))
         # Face Control: hands-free mode, used instead of the hand pipeline while it is on.
         self.face_model_path = root / "assets" / "models" / "face_landmarker.task"
         self.face_engine = FaceEngine()
@@ -233,7 +253,7 @@ class App(ctk.CTk):
         self.safety.confidence_threshold = sens["confidence_threshold"]
         self.action_controller.enabled = config["enabled"]
         self.action_controller.mappings = config["mappings"]
-        self.action_controller.drag_enabled = bool(config["drag_enabled"])
+        self._sync_drag()
         self.action_controller.presentation_keys = config["presentation_keys"]
         self.action_controller.shortcuts = config["shortcuts"]
         self.action_controller.confirm_smart_home = bool(config["confirm_smart_home"])
@@ -296,7 +316,7 @@ class App(ctk.CTk):
     def set_option(self, key: str, value) -> None:
         self.config_data[key] = value
         if key == "drag_enabled":
-            self.action_controller.drag_enabled = bool(value)
+            self._sync_drag()
         elif key == "presentation_keys":
             self.action_controller.presentation_keys = value
         elif key == "action_log_enabled":
@@ -339,8 +359,15 @@ class App(ctk.CTk):
             self._highlight_nav(self._current_page)
             self._draw_chart()
         elif key == "theme":
-            ctk.set_appearance_mode(value)
+            set_jarvis(value == "jarvis")
+            if value == "jarvis":
+                self.config_data["accent_color"] = set_accent(JARVIS_ACCENT)
+            ctk.set_appearance_mode("dark" if value == "jarvis" else value)
+            ctk.AppearanceModeTracker.update_callbacks()  # the palette lists changed in place
+            self.configure(fg_color=BG)
             self._shown.clear()  # cached colours are stale now
+            self._sync_pause_ui()
+            self._highlight_nav(self._current_page)
             self._draw_chart()
         self._schedule_save()
 
@@ -420,6 +447,65 @@ class App(ctk.CTk):
             dispatch = None  # an OS input hiccup must not take tracking down with it
         event = GestureEvent(face_event.name, 100.0 if face is not None else 0.0, None, None, face_event.trigger)
         return face, event, dispatch
+
+    # -------------------------------------------------------- virtual keyboard
+    def toggle_keyboard(self) -> None:
+        if self.keyboard_window is not None and self.keyboard_window.winfo_exists():
+            self.keyboard_model.visible = False
+            self.keyboard_model.set_layout(None, [])
+            self.keyboard_window.destroy()
+            self.keyboard_window = None
+            return
+        self.keyboard_window = KeyboardWindow(self)
+        self.keyboard_model.visible = True
+
+    def _pointer_position(self) -> tuple[float, float] | None:
+        position = getattr(self.executor, "position", None)
+        try:
+            return position() if position is not None else None
+        except Exception:
+            return None
+
+    def _over_keyboard(self) -> bool:
+        if not self.keyboard_model.visible:
+            return False
+        position = self._pointer_position()
+        return position is not None and self.keyboard_model.contains(*position)
+
+    def _keyboard_click(self, action: str) -> DispatchResult | None:
+        """Called on the tracking thread for every click. Over the virtual keyboard the
+        click becomes a key typed into the app in front; elsewhere it is left alone."""
+        if not self._over_keyboard():
+            return None
+        position = self._pointer_position()
+        key = self.keyboard_model.key_at(*position) if position is not None else None
+        result = self.keyboard_model.press(key, time.monotonic()) if key is not None else None
+        if result is None:
+            return DispatchResult("Keyboard", "")  # between keys, or too soon: swallowed, not clicked
+        self._send_key(result)
+        self._events.put(("key_flash", key))
+        return DispatchResult(f"Key {key_label(key)}", "")
+
+    def keyboard_type(self, key: str) -> None:
+        """A key pressed with a real mouse (on the UI thread)."""
+        result = self.keyboard_model.press(key, time.monotonic())
+        if result is not None:
+            self._send_key(result)
+            if self.keyboard_window is not None:
+                self.keyboard_window.flash(key)
+
+    def _send_key(self, result: tuple[str, str]) -> None:
+        executor = self.action_controller.executor  # the null one in practice mode
+        kind, value = result
+        if kind == "text":
+            executor.type_text(value)
+        elif kind == "key":
+            executor.press_key(value)
+
+    def _sync_drag(self) -> None:
+        # The Holo Desk's panels are moved with a held pinch, so drag is on while it is open.
+        self.action_controller.drag_enabled = bool(self.config_data["drag_enabled"]) or \
+            self._current_page == "Holo Desk"
 
     def set_practice(self, on: bool) -> None:
         """Practice mode: gestures are recognised and shown, but nothing is sent."""
@@ -1105,6 +1191,7 @@ class App(ctk.CTk):
         self._current_page = name
         self._highlight_nav(name)
         self._update_dry_run()
+        self._sync_drag()
         if name == "Dashboard":
             self.dashboard.grid()
             return
@@ -1512,6 +1599,11 @@ class App(ctk.CTk):
             page = self._pages.get("Learn")
             if page is not None and self._current_page == "Learn":
                 page.on_lesson_event(*data)
+        elif kind == "toggle_keyboard":
+            self.toggle_keyboard()
+        elif kind == "key_flash":
+            if self.keyboard_window is not None and self.keyboard_window.winfo_exists():
+                self.keyboard_window.flash(data[0])
         elif kind == "face_error":
             self.face_error = data[0]  # shown on the Face Control page; hand control carries on
             self.set_face_control(False)

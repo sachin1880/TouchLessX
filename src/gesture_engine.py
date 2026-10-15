@@ -32,7 +32,7 @@ DISCRETE_GESTURES = {
 BUILTIN_GESTURES = (
     "open_palm", "point", "three_fingers", "pinch", "two_fingers", "fist", "swipe_left", "swipe_right",
     "thumbs_up", "swipe_up", "swipe_down", "hand_open", "point_left", "point_right",
-    "both_palms", "two_hand_pinch",
+    "both_palms", "two_hand_pinch", "thumb_index",
 )
 # Gestures made with both hands raised. While two raised hands are in view and one of
 # these is in use, only they count - single-hand gestures are suspended, so the second
@@ -42,14 +42,14 @@ TWO_HAND_HOLD_SECONDS = 0.6  # both palms must be shown at least this long befor
 # Hand shapes that can drive either kind of action - a continuous one (cursor, scroll,
 # volume) while held, or a one-shot one - depending on what they are mapped to.
 FLEXIBLE_POSES = ("open_palm", "point", "two_fingers", "three_fingers", "fist", "thumbs_up",
-                  "point_left", "point_right", "both_palms", "two_hand_pinch")
+                  "point_left", "point_right", "both_palms", "two_hand_pinch", "thumb_index")
 # Gestures that are a movement rather than a pose. They are reported for a single
 # frame in place of the pose underneath, so they are only looked for while in use
 # (see `GestureEngine.muted`).
 MOTION_GESTURES = ("swipe_left", "swipe_right", "swipe_up", "swipe_down", "hand_open")
 # Gestures that are only looked for while mapped to something. An unused sideways point
 # simply counts as "point", so tilting the finger doesn't drop the cursor.
-OPTIONAL_GESTURES = MOTION_GESTURES + ("point_left", "point_right") + TWO_HAND_GESTURES
+OPTIONAL_GESTURES = MOTION_GESTURES + ("point_left", "point_right", "thumb_index") + TWO_HAND_GESTURES
 # "hand_open" = the hand opening out of a fist within this many seconds.
 HAND_OPEN_WINDOW_SECONDS = 1.2
 # User-trained poses (see custom_gestures.py) are reported as "custom:<name>" and
@@ -65,6 +65,10 @@ PINCH_RELEASE_RATIO = 1.25
 # Pinches may repeat this quickly regardless of the general cooldown, so two quick
 # pinches can form a double-click.
 PINCH_REPEAT_SECONDS = 0.15
+# "thumb_index" (an L: index and thumb out, the rest curled) is a one-hand zoom: its
+# movement is the change in the thumb-index gap, scaled to the two-hand zoom's steps.
+THUMB_OUT_MIN_GAP = 0.6       # thumb-index gap (palm lengths) for the thumb to count as out
+THUMB_INDEX_ZOOM_SCALE = 0.35
 
 
 def is_continuous(gesture: str) -> bool:
@@ -84,6 +88,13 @@ def pinch_distance(landmarks: np.ndarray) -> float:
     """Gap between thumb and index fingertips, in palm lengths."""
     scale = max(_dist(landmarks[MIDDLE_MCP], landmarks[WRIST]), 1e-4)
     return _dist(landmarks[THUMB_TIP], landmarks[INDEX_TIP]) / scale
+
+
+def _thumb_out(landmarks: np.ndarray) -> bool:
+    """The thumb held out from the hand, clear of the index finger - the L of "thumb_index"."""
+    thumb_extended = _dist(landmarks[THUMB_TIP], landmarks[PINKY_MCP]) > (
+        _dist(landmarks[THUMB_MCP], landmarks[PINKY_MCP]) * 1.05)
+    return thumb_extended and pinch_distance(landmarks) >= THUMB_OUT_MIN_GAP
 
 
 def _finger_extended(landmarks: np.ndarray, pip: int, tip: int) -> bool:
@@ -185,6 +196,7 @@ class GestureEngine:
         self._stable_static = "unknown"
         self._prev_palm: tuple[float, float] | None = None
         self._prev_spread: float | None = None  # distance between the two palms, last frame
+        self._prev_gap: float | None = None     # thumb-index gap of a "thumb_index" pose, last frame
         self._last_fire_time: dict[str, float] = {}
         self._swipe_cooldown_until = 0.0
         # One-shot poses that were let go before `pose_hold_seconds` - surfaced in the
@@ -214,6 +226,7 @@ class GestureEngine:
         self._stable_static = "unknown"
         self._prev_palm = None
         self._prev_spread = None
+        self._prev_gap = None
 
     def _stable_pose(self, landmarks: np.ndarray) -> str:
         """The current hand shape, debounced: a new shape only counts once it has been
@@ -225,6 +238,11 @@ class GestureEngine:
         raw = classify_static_gesture(landmarks, threshold)
         if raw in ("point_left", "point_right") and raw in self.muted:
             raw = "point"
+        if "thumb_index" not in self.muted:
+            if raw in ("point", "point_left", "point_right") and _thumb_out(landmarks):
+                raw = "thumb_index"
+            elif raw == "pinch" and self._stable_static == "thumb_index":
+                raw = "thumb_index"  # closing the L to zoom out must never click
         self.last_raw = raw
         if raw == "unknown" and self.custom_classifier is not None and self.custom_enabled:
             name = self.custom_classifier.predict(landmarks)
@@ -269,6 +287,14 @@ class GestureEngine:
         self._prev_palm = palm
 
         static_gesture = self._stable_pose(landmarks)
+        if static_gesture == "thumb_index":
+            # The one-hand zoom moves by the thumb-index gap, not by the palm.
+            gap = pinch_distance(landmarks)
+            motion_delta = None if self._prev_gap is None else (
+                (gap - self._prev_gap) * THUMB_INDEX_ZOOM_SCALE, 0.0)
+            self._prev_gap = gap
+        else:
+            self._prev_gap = None
         self._position_history.append((now, palm[0], palm[1]))
 
         swipe = None

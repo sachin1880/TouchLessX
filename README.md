@@ -14,6 +14,9 @@ cloud, and no video is ever stored or uploaded.
   raised eyebrows right-click, puckered lips open things, an open mouth scrolls.
 - 🎙 **Voice commands**: "computer, scroll down", "computer, open google chrome".
   Recognised offline. An optional local AI assistant can search, type and draft mails.
+- 🦾 **JARVIS mode**: a holographic **Holo Desk** whose panels you grab and move by
+  hand, a cyan HUD theme, a **virtual keyboard** you type on by pinching, and moving,
+  resizing and snapping real app windows and switching desktops with gestures.
 - 🎓 **Learn**: a guided lesson that teaches every gesture step by step, checking each
   one with the camera.
 - 🧠 **Custom gestures**: record your own hand poses and train a classifier on them.
@@ -24,6 +27,11 @@ cloud, and no video is ever stored or uploaded.
 ## Screenshots
 
 ![Dashboard: live camera preview, current gesture, quick controls and system status](docs/screenshots/dashboard.png)
+
+**JARVIS mode**: the **Holo Desk** (JARVIS theme). Point at a panel's title bar, pinch to
+grab it, move your hand, open your fingers to drop it; drag the corner to resize.
+
+![Holo Desk: camera, current-gesture HUD ring, system controls and movable panels in the JARVIS theme](docs/screenshots/holo-desk.png)
 
 **New here?** Open **Learn** in the sidebar: a guided lesson that teaches every gesture
 in your profile, one at a time, with the camera checking each one. Nothing is clicked
@@ -107,12 +115,14 @@ then **Open**. The packaged app keeps its settings and data in
 | 👍 Thumbs up | Confirm a pending smart-home command |
 | 🤏🤏 Pinch with both hands, move them apart / together | Zoom in / out (⌘ + / ⌘ −; Ctrl on Windows) |
 | 🙌 Both palms open, held | Pause / resume control |
+| 🤙 Thumb + index "L", spread / close | Zoom in / out with one hand (free to map; used by the JARVIS profile) |
 | 👆 👇 Fast flick up / down · 🖐 opening the hand out of a fist | Free to map |
 
 Every gesture can be remapped or switched off in **Gesture Studio**. Besides mouse and
 media actions, a gesture can press a keyboard shortcut you define, copy / cut / paste /
 undo / redo, switch tabs or apps, go back or forward, zoom, minimise or restore a
-window, open a chosen application, or trigger a smart-home webhook.
+window, move / resize / snap the front window, switch desktops, show the virtual keyboard,
+open a chosen application, or trigger a smart-home webhook.
 
 ### Profiles
 
@@ -127,6 +137,7 @@ from the header.
 | **Work** | Mouse and volume only, no media or slide gestures to misfire |
 | **Presentation** | Slides only |
 | **Media** | Music and video |
+| **JARVIS** | The Iron Man layout — see [JARVIS mode](#jarvis-mode) |
 | **GestureAI** | Lock-based: open palm is a safe pose, pointing steers, a **fist locks** all control and a **thumbs-up unlocks** it |
 | Your own | Create, duplicate, rename, import and export on the **Profiles** page |
 
@@ -152,6 +163,73 @@ as a fist had minimised a window 27 times in three minutes.
 Scrolling has three styles: **Swipe** (a quick flick sets the page rolling and it
 coasts to a stop), **Glide** (distance from a neutral point sets the speed) and
 **Follow** (the page moves with the hand). Output is in pixels, so it moves smoothly.
+
+## JARVIS mode
+
+Switch the theme to **JARVIS (cyan HUD)** in Settings, choose the **JARVIS** profile in
+the header, and open **Holo Desk**.
+
+### Holo Desk
+
+A workspace in the style of Tony Stark's computer:
+
+- **Camera Preview** with hand landmarks, a **Current Gesture** HUD ring (gesture, action,
+  confidence) and **System Controls** (pause, camera, keyboard, settings, your apps).
+- **Panels you move by hand**: Files (opens Documents, Downloads, Desktop, Pictures,
+  Music), Notes (a typing test area), Music (play / pause / skip / volume), System Info
+  (CPU, memory and battery rings) and Clock. Point at a title bar, **pinch to grab**,
+  move, **open your fingers to drop**; drag the ◢ corner to **resize**. Panels glide,
+  snap to a grid when dropped, **stay where you leave them** between sessions, and
+  are dropped in place if the hand is lost mid-drag. **Reset layout** puts them back.
+- A **dock** with your apps, previous / next desktop, Mission Control and the keyboard.
+- Your profile's **gesture cards**, and cards for panels, keyboard, voice and safety.
+
+Drag is switched on automatically while the Holo Desk is open.
+
+### JARVIS profile
+
+| Gesture | Action |
+|---|---|
+| ☝️ Point | Move the cursor |
+| 🤏 Pinch | Click · grab and drag (panels, files, windows' content) · release to drop |
+| 🤏🤏 Two quick pinches | Double-click |
+| ✋ Open palm | Rest: the cursor stays still |
+| 👈 👉 Flick left / right (open palm) | Previous / next desktop |
+| 👆 👇 Flick up / down (open palm) | Scroll up / down |
+| 🤙 Thumb + index "L", spread / close | Zoom in / out |
+| ✌️ Two fingers | Right click |
+| 🤟 Three fingers, held, move | **Move the front app window** |
+| ✊ Fist | Emergency stop |
+| 🙌 Both palms | Pause / resume (also resumes after an emergency stop) |
+| 🤏🤏 Pinch with both hands, apart / together | Zoom in / out |
+
+### Virtual keyboard
+
+Open it from the Holo Desk, the dock, or map **Show / Hide Keyboard** to a gesture. It
+floats above every app. Point at a key — it lights up — and **pinch to type**: A–Z,
+numbers, Space, Enter, Backspace, Shift (one key, like a phone) and common punctuation.
+The pinch never clicks the keyboard window, so TouchlessX doesn't take the focus: the
+key is typed into **the app you are using**. One pinch is one key, and a second press
+within 0.3 s is ignored. Use the Holo Desk's Notes panel to practise. Practice mode and
+pause apply as everywhere else.
+
+![Virtual keyboard: a floating keyboard that types into the app in front](docs/screenshots/keyboard.png)
+
+### Real windows and desktops
+
+| Action (map it in Gesture Studio) | What it does |
+|---|---|
+| Move Window / Resize Window (follow hand) | Hold the pose: the front app's window follows your hand |
+| Window to Left / Right Half, Maximize, Center | Snaps the front window |
+| Next / Previous Desktop, Mission Control | ⌃→ / ⌃← / ⌃↑ |
+
+This is native window management through the macOS Accessibility API — the permission
+TouchlessX already needs for the mouse — and is separate from the Holo Desk's own panels.
+It works on ordinary windows of the app in front. macOS does not allow it on
+**full-screen** windows, some system windows and apps that refuse accessibility changes;
+the action then simply does nothing. TouchlessX never moves its own window this way.
+Desktop switching uses the Mission Control shortcuts, which must be switched on in
+System Settings → Keyboard → Keyboard Shortcuts → Mission Control.
 
 ## Face Control (hands-free)
 
@@ -268,6 +346,7 @@ None of the buttons and keys depend on a gesture being recognised.
 | Page | What it does |
 |---|---|
 | **Dashboard** | Live preview with hand landmarks, current gesture, confidence and last action, feature switches, recent gestures, session analytics, gesture guide, system status |
+| **Holo Desk** | JARVIS workspace: camera, gesture HUD, system controls, movable panels, dock, gesture cards |
 | **Learn** | The guided lesson |
 | **Gesture Studio** | Practice area, gesture → action mapping with an on/off switch per gesture, per-gesture confidence and cooldown, recognition sensitivity |
 | **Training Studio** | Record, train and evaluate custom gestures; model versions |
@@ -279,7 +358,7 @@ None of the buttons and keys depend on a gesture being recognised.
 | **Face Control** | Hands-free mode: expressions, actions, sensitivity, cursor style |
 | **Clipboard** | Gestures for copy / cut / paste / delete / select all / undo / redo, and a history of the last ten copied texts that can be pasted again |
 | **Profiles** | Create, rename, duplicate, switch, import and export profiles |
-| **Settings** | Dark / light theme, accent colour, mini controller, camera and resolution, mirror preview, controlling hand (left / right / either), emergency stop gesture, start at login, menu-bar icon, update check, privacy and data retention |
+| **Settings** | Dark / JARVIS / light theme, accent colour, mini controller, camera and resolution, mirror preview, controlling hand (left / right / either), emergency stop gesture, start at login, menu-bar icon, update check, privacy and data retention |
 
 ### Desktop extras
 
@@ -332,6 +411,9 @@ TouchlessX/
 │   ├── hand_tracker.py       # MediaPipe hand landmarks
 │   ├── gesture_engine.py     # Classification, debouncing, hold-to-fire, swipes, two-hand gestures
 │   ├── face_control.py       # Face tracker, head pointer, winks, expressions, scroll mode
+│   ├── window_manager.py     # Move, resize and snap other apps' windows (macOS Accessibility)
+│   ├── virtual_keyboard.py   # Keyboard layout, Shift, repeat guard, key under the cursor
+│   ├── system_stats.py       # CPU, memory and battery for the System Info panel
 │   ├── action_controller.py  # Gesture -> action, cursor filter, shortcuts, OS input
 │   ├── safety.py             # Pause, emergency stop, lock, confidence gating
 │   ├── custom_gestures.py    # Landmark features and the check for trained poses
@@ -349,13 +431,16 @@ TouchlessX/
 │   ├── colors.py             # Accent colour arithmetic
 │   ├── ui.py                 # App shell, dashboard, mini controller, camera thread
 │   ├── ui_pages.py           # The other pages
+│   ├── ui_holo.py            # The Holo Desk and its movable panels
+│   ├── ui_hud.py             # HUD ring gauges
+│   ├── ui_keyboard.py        # The virtual keyboard window
 │   └── ui_widgets.py         # Light/dark palette and widget helpers
-└── tests/                    # 315 tests; no camera, display, network or real input needed
+└── tests/                    # 333 tests; no camera, display, network or real input needed
 ```
 
 ## Running the tests
 
-All gesture, face, voice, mapping, profile, shortcut, history, lesson and webhook logic
+All gesture, face, voice, keyboard, window, mapping, profile, shortcut, history, lesson and webhook logic
 is tested without a camera, display, network or real mouse and keyboard:
 
 ```bash
@@ -391,6 +476,13 @@ the "nothing leaves this computer" promise.
   the mini controller, a gesture or an expression.
 - Custom gestures are matched in 2D and only for poses the built-in rules don't
   recognise.
+- Window move / resize / snap works on macOS only, and not on full-screen windows or
+  apps that refuse accessibility changes. Desktop switching needs the Mission Control
+  shortcuts switched on.
+- The virtual keyboard types through the system's keyboard layout; with a non-US layout
+  some punctuation may come out differently.
+- The Holo Desk shows TouchlessX's own panels. Other apps' windows can't be embedded in
+  it — macOS doesn't allow that — so they are moved on the real desktop instead.
 - Opening applications works on macOS and Windows only.
 - Smart Home sends a plain HTTP POST per trigger, with no device discovery or state.
 - The Mac app is not notarised, so macOS warns the first time. There is no Windows
@@ -407,6 +499,29 @@ the "nothing leaves this computer" promise.
 - Switching profiles automatically by application.
 - Running user-defined commands — left out on purpose: gestures may press keys and
   open chosen applications, nothing more.
+
+## Licences
+
+Everything TouchlessX needs is free and open source, and runs locally:
+
+| Component | Licence |
+|---|---|
+| MediaPipe (and its hand and face models) | Apache 2.0 |
+| OpenCV | Apache 2.0 |
+| NumPy, scikit-learn | BSD 3-Clause |
+| PyAutoGUI | BSD 3-Clause |
+| CustomTkinter | MIT |
+| Pillow | MIT-CMU |
+| PyObjC | MIT |
+| Vosk and its small English model | Apache 2.0 |
+| sounddevice | MIT |
+| faster-whisper, Whisper model weights | MIT |
+| Ollama | MIT |
+| Llama 3.2 (optional assistant model) | Llama 3.2 Community License — has its own conditions; check them before distributing it commercially |
+| PyInstaller (only for building the Mac app) | GPL 2.0 with a bootloader exception that allows distributing the built app |
+
+No paid API, account, cloud service or database is required. Check the current terms
+of each project before a commercial release.
 
 ## Documentation
 

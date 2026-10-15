@@ -113,6 +113,10 @@ def _preset(**changes) -> dict:
     return profile
 
 
+# Built-in profiles introduced after the first release: offered once to existing users.
+LATER_BUILTINS = ("JARVIS",)
+
+
 def builtin_profiles() -> dict[str, dict]:
     return {
         "Default": _preset(),
@@ -160,6 +164,20 @@ def builtin_profiles() -> dict[str, dict]:
                       "two_fingers": "scroll", "three_fingers": "show_app", "fist": "lock_controls",
                       "thumbs_up": "confirm", "point_left": "prev_slide", "point_right": "next_slide",
                       "swipe_left": "none", "swipe_right": "none"},
+            drag_enabled=True,
+        ),
+        "JARVIS": _preset(
+            # The Iron Man layout: point to steer, pinch to click / grab and drag, open
+            # palm to rest the cursor, flick to change desktop or scroll, spread thumb and
+            # index (an L) to zoom, three fingers held to move the front window. A fist is
+            # an emergency stop; both palms resume.
+            enabled={"smart_home": False},
+            mappings={"point": "move_cursor", "pinch": "left_click", "open_palm": "safety_hold",
+                      "swipe_left": "prev_workspace", "swipe_right": "next_workspace",
+                      "swipe_up": "scroll_up", "swipe_down": "scroll_down", "thumb_index": "zoom",
+                      "two_fingers": "right_click", "fist": "emergency_stop", "three_fingers": "move_window",
+                      "both_palms": "toggle_pause", "two_hand_pinch": "zoom", "thumbs_up": "confirm",
+                      "hand_open": "none", "point_left": "none", "point_right": "none"},
             drag_enabled=True,
         ),
         "Media": _preset(

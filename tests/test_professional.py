@@ -144,7 +144,7 @@ def test_practice_mode_reports_actions_without_performing_them():
 # ------------------------------------------------------------------ profiles
 def test_builtin_profiles_are_valid_and_differ_where_it_matters():
     presets = builtin_profiles()
-    assert list(presets) == ["Default", "Work", "Presentation", "Air Mouse", "Browse", "GestureAI", "Media"]
+    assert list(presets) == ["Default", "Work", "Presentation", "Air Mouse", "Browse", "GestureAI", "JARVIS", "Media"]
     for profile in presets.values():
         assert validate_profile(profile) == profile  # already clean
     assert presets["Presentation"]["mappings"]["swipe_right"] == "next_slide"
@@ -156,7 +156,7 @@ def test_builtin_profiles_are_valid_and_differ_where_it_matters():
 def test_profile_store_create_rename_duplicate_delete_and_persist(tmp_path):
     path = tmp_path / "profiles.json"
     store = ProfileStore(path)
-    assert store.names() == ["Default", "Work", "Presentation", "Air Mouse", "Browse", "GestureAI", "Media"]
+    assert store.names() == ["Default", "Work", "Presentation", "Air Mouse", "Browse", "GestureAI", "JARVIS", "Media"]
     store.delete("Air Mouse")
     store.delete("Browse")
     store.delete("GestureAI")
@@ -177,7 +177,7 @@ def test_profile_store_create_rename_duplicate_delete_and_persist(tmp_path):
     store.delete("Video editing copy 2")
 
     reloaded = ProfileStore(path)
-    assert reloaded.names() == ["Default", "Office", "Presentation", "Media", "Video editing", "Video editing copy"]
+    assert reloaded.names() == ["Default", "Office", "Presentation", "JARVIS", "Media", "Video editing", "Video editing copy"]
     assert reloaded.get("Video editing")["mappings"]["fist"] == "mute"
     assert set(reloaded.get("Media")) == set(PROFILE_KEYS)
 

@@ -26,6 +26,7 @@ DEFAULT_MAPPINGS = {
     "point_right": "none",
     "both_palms": "toggle_pause",
     "two_hand_pinch": "zoom",
+    "thumb_index": "none",
 }
 
 DEFAULT_CONFIG = {
@@ -90,6 +91,12 @@ DEFAULT_CONFIG = {
         "ai_assistant": False,
     },
     "mappings": dict(DEFAULT_MAPPINGS),
+    # Built-in profiles added after first start that have been offered once already, so a
+    # deleted one doesn't come back.
+    "profiles_added": [],
+    # Holo Desk panel positions: panel id -> [x, y, width, height] in pixels.
+    "holo_panels": {},
+    "holo_notes": "",
     # Face Control (face_control.py): hands-free mode, replaces hand gestures while on.
     "face_control": False,
     "face": {

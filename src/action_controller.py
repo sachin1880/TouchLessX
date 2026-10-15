@@ -18,6 +18,7 @@ from typing import Protocol
 from .config import DEFAULT_MAPPINGS
 from .gesture_engine import CONTINUOUS_GESTURES, FLEXIBLE_POSES, GestureEvent
 from .safety import SafetyGuard
+from .window_manager import MIN_HEIGHT as MIN_WINDOW_HEIGHT, MIN_WIDTH as MIN_WINDOW_WIDTH, NullWindowManager
 
 SMART_HOME_PREFIX = "smart_home:"
 
@@ -29,6 +30,8 @@ FOLLOW_PIXELS_PER_FRAME_HEIGHT = 3000.0
 PIXELS_PER_WHEEL_CLICK = 40.0           # for systems that only take whole wheel clicks
 MINIMIZE_MIN_INTERVAL = 2.0             # seconds between two minimise actions
 ZOOM_STEP = 0.07                        # change in distance between the hands per zoom step
+WINDOW_GAIN = 1.5                       # window travel per hand travel, in screen widths per frame width
+SCROLL_STEP_PIXELS = 400                # one "Scroll Up" / "Scroll Down" step
 # Swipe ("flick") scrolling. Thresholds come from recorded real use: deliberate swipes
 # peaked at 0.8-2.0 frame heights per second, while steering the cursor stayed under 0.5.
 FLICK_SPEED = 0.7                       # peak speed a movement must reach to count as a swipe
@@ -108,6 +111,7 @@ class InputExecutor(Protocol):
     def double_click(self) -> None: ...
     def click_again(self) -> None: ...
     def press_key(self, key: str) -> None: ...
+    def type_text(self, text: str) -> None: ...
     def hotkey(self, keys: list[str]) -> None: ...
     def scroll(self, clicks: int) -> None: ...
     def hscroll(self, clicks: int) -> None: ...
@@ -167,6 +171,10 @@ class PyAutoGuiExecutor:
     def position(self) -> tuple[int, int]:
         """Where the cursor is now."""
         return tuple(self._pyautogui.position())
+
+    def type_text(self, text: str) -> None:
+        """Types the characters into whatever has keyboard focus."""
+        self._pyautogui.write(text, _pause=False)
 
     def click(self, button: str = "left") -> None:
         self._pyautogui.click(button=button)
@@ -352,6 +360,9 @@ class NullExecutor:
     def press_key(self, key: str) -> None:
         pass
 
+    def type_text(self, text: str) -> None:
+        pass
+
     def hotkey(self, keys: list[str]) -> None:
         pass
 
@@ -436,6 +447,8 @@ ACTIONS: dict[str, ActionSpec] = {
     "volume": ActionSpec("Volume Up / Down", "volume_control", "continuous"),
     "safety_hold": ActionSpec("Safety Hold (do nothing)", "", "continuous"),
     "zoom": ActionSpec("Zoom (hands apart / together)", "", "continuous"),
+    "move_window": ActionSpec("Move Window (follow hand)", "", "continuous"),
+    "resize_window": ActionSpec("Resize Window (follow hand)", "", "continuous"),
     "left_click": ActionSpec("Left Click", "mouse_control", "discrete"),
     "right_click": ActionSpec("Right Click", "mouse_control", "discrete"),
     "double_click": ActionSpec("Double Click", "mouse_control", "discrete"),
@@ -475,6 +488,16 @@ ACTIONS: dict[str, ActionSpec] = {
     "zoom_in": ActionSpec("Zoom In", "", "discrete"),
     "zoom_out": ActionSpec("Zoom Out", "", "discrete"),
     "minimize_window": ActionSpec("Minimize Window", "", "discrete"),
+    "window_left": ActionSpec("Window to Left Half", "", "discrete"),
+    "window_right": ActionSpec("Window to Right Half", "", "discrete"),
+    "window_maximize": ActionSpec("Maximize Window", "", "discrete"),
+    "window_center": ActionSpec("Center Window", "", "discrete"),
+    "next_workspace": ActionSpec("Next Desktop", "", "discrete"),
+    "prev_workspace": ActionSpec("Previous Desktop", "", "discrete"),
+    "mission_control": ActionSpec("Mission Control", "", "discrete"),
+    "scroll_up": ActionSpec("Scroll Up", "mouse_control", "discrete"),
+    "scroll_down": ActionSpec("Scroll Down", "mouse_control", "discrete"),
+    "toggle_keyboard": ActionSpec("Show / Hide Keyboard", "", "discrete"),
     "restore_window": ActionSpec("Restore Window", "", "discrete"),
 }
 
@@ -500,6 +523,10 @@ _PLATFORM_KEYS = {  # action -> (macOS, elsewhere)
     "switch_app": (["command", "tab"], ["alt", "tab"]),
     "go_back": (["command", "["], ["alt", "left"]),
     "go_forward": (["command", "]"], ["alt", "right"]),
+    # macOS: the Mission Control shortcuts (System Settings > Keyboard > Keyboard Shortcuts).
+    "next_workspace": (["ctrl", "right"], ["ctrl", "win", "right"]),
+    "prev_workspace": (["ctrl", "left"], ["ctrl", "win", "left"]),
+    "mission_control": (["ctrl", "up"], ["win", "tab"]),
 }
 _PLAIN_KEYS = {"delete": "backspace", "page_up": "pageup", "page_down": "pagedown"}
 
@@ -590,6 +617,9 @@ class ActionController:
         self.calibration: tuple[float, float, float, float] | None = None
         self.apps: dict[str, str] = {}  # name -> application path, for "app:<name>" actions
         self.callbacks: dict[str, object] = {}  # app-level hooks, e.g. "show_app"
+        # Native window management (window_manager.py); the null one does nothing.
+        self.window_manager = NullWindowManager()
+        self._window: dict | None = None  # the window being moved or resized by a held pose
         # Practice mode: gestures are recognised and reported, but nothing is sent.
         self.dry_run = False
         self._null_executor = NullExecutor()
@@ -721,6 +751,8 @@ class ActionController:
         if spec.kind == "continuous":
             if event is None:
                 return None
+            if action in ("move_window", "resize_window"):
+                return self._window_follow(event, action)
             if action == "safety_hold":
                 return DispatchResult("Safety Hold", "")
             if action == "zoom":
@@ -731,6 +763,12 @@ class ActionController:
                 return self._scroll(event)
             return self._adjust_volume(event)
 
+        if action in ("left_click", "double_click", "right_click"):
+            # A click over the virtual keyboard types a key instead (see ui_keyboard.py).
+            hook = self.callbacks.get("pointer_click")
+            result = hook(action) if hook is not None else None
+            if result is not None:
+                return result
         if action == "left_click":
             if self._click_or_double():
                 return DispatchResult("Double Click", spec.category)
@@ -783,6 +821,17 @@ class ActionController:
             if not self.executor.minimize_window():
                 return None
             self._last_minimize = now
+        elif action in ("window_left", "window_right", "window_maximize", "window_center"):
+            if not self.dry_run and not self.window_manager.arrange(action[len("window_"):]):
+                return None  # no movable window in front (full screen, or TouchlessX itself)
+        elif action in ("scroll_up", "scroll_down"):
+            step = int(SCROLL_STEP_PIXELS * self.scroll_speed)
+            self.executor.scroll_pixels(0, step if action == "scroll_up" else -step)
+        elif action == "toggle_keyboard":
+            callback = self.callbacks.get("toggle_keyboard")
+            if callback is None:
+                return None
+            callback()
         elif action == "restore_window":
             if not self.executor.restore_window():
                 return None
@@ -854,6 +903,7 @@ class ActionController:
         """Lets go of a held drag - called when the pinch ends, control is paused, or
         the app shuts down, so the mouse button is never left stuck down."""
         self._momentum = None
+        self._window = None
         if self._dragging:
             self._dragging = False
             self.executor.mouse_up()
@@ -904,6 +954,38 @@ class ActionController:
         self._apply_cursor()
         return DispatchResult("Mouse Move", "mouse_control")
 
+    def _window_follow(self, event: GestureEvent, action: str) -> DispatchResult | None:
+        """A held pose moves (or resizes) the front window with the hand. The window is
+        picked up once, when the pose has been held for `engage_seconds`."""
+        now = self._clock()
+        held = self._window
+        if held is None or held["action"] != action or now - held["time"] > 0.4:
+            self._window = None
+            if event.hold_time < self.engage_seconds:
+                return None
+            handle = None if self.dry_run else self.window_manager.grab()
+            frame = self.window_manager.frame(handle) if handle is not None else None
+            if not self.dry_run and frame is None:
+                return None  # nothing movable in front
+            self._window = {"action": action, "handle": handle, "time": now,
+                            "frame": list(frame) if frame is not None else [0.0, 0.0, 0.0, 0.0]}
+            return DispatchResult("Move Window" if action == "move_window" else "Resize Window", "")
+        held["time"] = now
+        if event.motion_delta is None or held["handle"] is None:
+            return None
+        dx = event.motion_delta[0] * self.screen_w * WINDOW_GAIN
+        dy = event.motion_delta[1] * self.screen_h * WINDOW_GAIN
+        frame = held["frame"]
+        if action == "move_window":
+            frame[0] += dx
+            frame[1] += dy
+            self.window_manager.set_frame(held["handle"], frame[0], frame[1])
+        else:
+            frame[2] = max(MIN_WINDOW_WIDTH, frame[2] + dx)
+            frame[3] = max(MIN_WINDOW_HEIGHT, frame[3] + dy)
+            self.window_manager.set_frame(held["handle"], width=frame[2], height=frame[3])
+        return None
+
     def _drag(self, event: GestureEvent) -> DispatchResult | None:
         """Pinch-and-hold drag: after the click, a pinch held past `drag_hold_seconds`
         presses the button down and the cursor follows the hand until the pinch opens."""
@@ -912,6 +994,9 @@ class ActionController:
         if not self._dragging:
             if event.hold_time < self.drag_hold_seconds:
                 return None
+            blocked = self.callbacks.get("pointer_blocked")
+            if blocked is not None and blocked():
+                return None  # over the virtual keyboard: a held pinch is a key press, not a drag
             self._dragging = True
             self.executor.mouse_down()
             return DispatchResult("Drag", "mouse_control")

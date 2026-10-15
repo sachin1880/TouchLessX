@@ -1329,7 +1329,7 @@ class SettingsPage(Page):
     subtitle = "General & privacy."
 
     RESOLUTIONS = {"640 × 360": (640, 360), "960 × 540": (960, 540), "1280 × 720": (1280, 720)}
-    THEMES = {"Dark": "dark", "Light": "light", "Match system": "system"}
+    THEMES = {"Dark": "dark", "JARVIS (cyan HUD)": "jarvis", "Light": "light", "Match system": "system"}
     RETENTION = {"7 days": 7, "30 days": 30, "90 days": 90, "1 year": 365}
     HANDS = {"Either hand": "any", "Right hand only": "right", "Left hand only": "left"}
 
