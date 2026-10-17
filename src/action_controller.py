@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from .cctv_commands import CCTV_PREFIX, cctv_actions, cctv_command
 from .config import DEFAULT_MAPPINGS
 from .gesture_engine import CONTINUOUS_GESTURES, FLEXIBLE_POSES, GestureEvent
 from .safety import SafetyGuard
@@ -549,6 +550,9 @@ _SLIDE_KEYS = {
 def action_spec(action: str) -> ActionSpec | None:
     if action.startswith(SMART_HOME_PREFIX):
         return ActionSpec(action[len(SMART_HOME_PREFIX):], "smart_home", "discrete")
+    if action.startswith(CCTV_PREFIX):
+        command = cctv_command(action)
+        return ActionSpec(f"CCTV: {command.label}", "", "discrete") if command else None
     if action.startswith(SHORTCUT_PREFIX):
         return ActionSpec(action[len(SHORTCUT_PREFIX):], "", "discrete")
     if action.startswith(APP_PREFIX):
@@ -572,6 +576,7 @@ def actions_for_gesture(gesture: str, smart_devices: list[str] | None = None,
     actions += [SHORTCUT_PREFIX + name for name in (shortcuts or [])]
     actions += [APP_PREFIX + name for name in (apps or [])]
     actions += [SMART_HOME_PREFIX + name for name in (smart_devices or [])]
+    actions += cctv_actions()
     return actions
 
 
@@ -839,7 +844,15 @@ class ActionController:
             pending, self._pending = self._pending, None
             if pending is None or self._clock() > pending[1]:
                 return None
+            if pending[0].startswith(CCTV_PREFIX):
+                return self._send_cctv(pending[0])
             return self._send_smart_home(pending[0])
+        elif action.startswith(CCTV_PREFIX):
+            # Sensitive camera commands wait for a confirmation gesture, like smart home.
+            if cctv_command(action).needs_confirmation and not force:
+                self._pending = (action, self._clock() + self.confirm_seconds)
+                return DispatchResult(f"Confirm {spec.label}?", spec.category)
+            return self._send_cctv(action)
         elif action.startswith(SMART_HOME_PREFIX):
             if self.confirm_smart_home and not force:
                 self._pending = (action, self._clock() + self.confirm_seconds)
@@ -848,6 +861,17 @@ class ActionController:
         else:
             return None
         return DispatchResult(spec.label, spec.category)
+
+    def _send_cctv(self, action: str) -> DispatchResult | None:
+        """Hands the command to the app's CCTV service, which sends it on its own thread -
+        nothing here waits on the network."""
+        label = action_spec(action).label
+        if self.dry_run:
+            return DispatchResult(label, "")
+        callback = self.callbacks.get("cctv")
+        if callback is None or not callback(action[len(CCTV_PREFIX):]):
+            return None
+        return DispatchResult(label, "")
 
     def _send_smart_home(self, action: str) -> DispatchResult | None:
         name = action[len(SMART_HOME_PREFIX):]

@@ -118,10 +118,11 @@ def test_other_speech_is_not_a_command_or_stays_harmless(spoken):
 
 
 def test_every_voice_action_exists_and_has_keys_or_a_handler():
+    from src.cctv_commands import cctv_command
     from src.voice import _SIMPLE
 
     for _, action, _ in _SIMPLE:
-        assert action in ACTIONS, action
+        assert action in ACTIONS or cctv_command(action) is not None, action
     for action in ("next_tab", "prev_tab", "new_tab", "close_tab", "switch_app", "go_back", "go_forward",
                    "reload", "zoom_in", "zoom_out"):
         assert edit_keys(action), action

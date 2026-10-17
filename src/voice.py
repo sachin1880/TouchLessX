@@ -44,6 +44,14 @@ class VoiceCommand:
 _FILLER = {"please", "the", "this", "that", "a", "an", "my", "can", "you", "could", "would", "to", "now", "just",
            "it", "me", "for", "of", "on", "and", "then", "page", "pages", "one", "current", "hey", "okay"}
 _SIMPLE = (  # (words that must all be present, action id, label) - first match wins
+    # Home CCTV (cctv_commands.py). The sensitive ones then wait for "computer, confirm".
+    ({"snapshot"}, "cctv:capture_snapshot", "CCTV: Take Snapshot"),
+    ({"camera", "photo"}, "cctv:capture_snapshot", "CCTV: Take Snapshot"),
+    ({"camera", "picture"}, "cctv:capture_snapshot", "CCTV: Take Snapshot"),
+    ({"flip", "camera"}, "cctv:switch_camera", "CCTV: Flip Camera"),
+    ({"switch", "camera"}, "cctv:switch_camera", "CCTV: Flip Camera"),
+    ({"camera", "status"}, "cctv:refresh_status", "CCTV: Camera Status"),
+    ({"confirm"}, "confirm", "Confirm"),
     ({"double", "click"}, "double_click", "Double Click"),
     ({"right", "click"}, "right_click", "Right Click"),
     ({"click"}, "left_click", "Click"),
@@ -87,7 +95,8 @@ _COMMAND_WORDS = (
     "bit lot more keep continue continuously top bottom start beginning end go stop halt everything emergency "
     "pause resume control gestures tab tabs next previous new close change switch last open launch window "
     "application app minimize restore click double select all copy paste cut undo redo delete volume louder "
-    "quieter mute play music video song track slide zoom reload refresh back forward lock unlock"
+    "quieter mute play music video song track slide zoom reload refresh back forward lock unlock "
+    "camera snapshot photo picture flip status confirm take"
 ).split()
 
 

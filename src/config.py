@@ -97,6 +97,12 @@ DEFAULT_CONFIG = {
     # Holo Desk panel positions: panel id -> [x, y, width, height] in pixels.
     "holo_panels": {},
     "holo_notes": "",
+    # Home CCTV (cctv_client.py): the HomeSmartCCTV API address, the account email (not the
+    # password - that is never stored) and the camera gestures control. The session token
+    # lives in the system credential store, not here.
+    "cctv_server_url": "http://localhost:8000/api",
+    "cctv_email": "",
+    "cctv_device_id": "",
     # Face Control (face_control.py): hands-free mode, replaces hand gestures while on.
     "face_control": False,
     "face": {

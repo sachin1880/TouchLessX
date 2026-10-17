@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from .action_controller import ACTIONS, APP_PREFIX, SHORTCUT_PREFIX, SMART_HOME_PREFIX
+from .cctv_commands import CCTV_PREFIX, cctv_command
 from .config import DEFAULT_CONFIG
 from .gesture_engine import BUILTIN_GESTURES, CUSTOM_PREFIX, FLEXIBLE_POSES
 
@@ -70,6 +71,8 @@ def validate_profile(data, shortcuts=(), smart_devices=(), apps=()) -> dict:
             known = action[len(APP_PREFIX):] in apps
         elif action.startswith(SMART_HOME_PREFIX):
             known = action[len(SMART_HOME_PREFIX):] in smart_devices
+        elif action.startswith(CCTV_PREFIX):
+            known = cctv_command(action) is not None  # a fixed allowlist, safe to import
         else:
             known = action in ACTIONS
         # Only a hand pose can be held, so only poses may carry a continuous action.

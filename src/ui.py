@@ -43,6 +43,8 @@ from .assistant import (
 )
 from .voice import Transcriber, VoiceListener, command_vocabulary, installed_apps, parse_command
 from .ui_pages import PAGES, action_label
+from .cctv_client import CctvService
+from .ui_cctv import HomeCctvPage
 from .ui_holo import HoloDeskPage
 from .ui_keyboard import KeyboardWindow
 from .virtual_keyboard import KeyboardModel, key_label
@@ -65,6 +67,7 @@ NAV_ITEMS = [
     ("System Controls", "Mouse & Keyboard", "➤"),
     ("Media & Presentation", "Music, Video, Slides", "♫"),
     ("Smart Home", "IoT Device Control", "⌂"),
+    ("Home CCTV", "Cameras & security", "📹"),
     ("AI Insights", "Usage & suggestions", "✦"),
     ("Voice", "Speak commands", "🎙"),
     ("Face Control", "Head & eyes, no hands", "🙂"),
@@ -94,6 +97,7 @@ _CONTROLLER_KEYS = ("cursor_smoothing", "cursor_dead_zone", "active_area_margin"
 _RECORD_LIMIT = 300  # samples per recording run; it stops by itself there
 PREVIEW_PAGES = ("Dashboard", "Training Studio", "Learn", "Face Control", "Holo Desk")
 PAGES["Holo Desk"] = HoloDeskPage
+PAGES["Home CCTV"] = HomeCctvPage
 REST_EDGE = 0.98  # wrist this low in the frame = a resting hand (chosen from recorded real use)
 
 
@@ -160,6 +164,13 @@ class App(ctk.CTk):
             self.executor = NullExecutor()
             self._input_unavailable = True
         self.action_controller = ActionController(self.executor, self.safety, {}, smart_home=self.smart_home)
+        # Home CCTV: HomeSmartCCTV cameras. Network work runs on the service's own thread;
+        # the controller only hands it command names (after any confirmation gesture).
+        self.cctv = CctvService(config["cctv_server_url"])
+        self.cctv.select_device(config["cctv_device_id"])
+        if self.cctv.signed_in:
+            self.cctv.refresh_devices()
+        self.action_controller.callbacks["cctv"] = self.cctv.send
         # Native window management (move / resize / snap the front window).
         self.action_controller.window_manager = WindowManager()
         # The virtual keyboard: a pinch over it types a key instead of clicking.
@@ -1170,6 +1181,18 @@ class App(ctk.CTk):
                                                                                          pady=(10, 0))
         label(tip, "Processed on this computer.\nSpace or Esc pauses control.", 11,
               color=TEXT_DIM, justify="left").pack(anchor="w", padx=14, pady=(2, 10))
+        # The card is decoration: on a short window it steps aside so it never covers the menu.
+        self._sidebar_tip = tip
+        sidebar.bind("<Configure>", lambda _e: self.after_idle(self._fit_sidebar_tip))
+
+    def _fit_sidebar_tip(self) -> None:
+        tip, last = self._sidebar_tip, list(self._nav.values())[-1][0]
+        room = tip.master.winfo_height() - (last.winfo_y() + last.winfo_height())
+        needed = tip.winfo_reqheight() + 40
+        if room < needed and tip.winfo_ismapped():
+            tip.pack_forget()
+        elif room >= needed + 20 and not tip.winfo_ismapped():
+            tip.pack(fill="x", padx=12, pady=16, side="bottom")
 
     def current_page_widget(self):
         return self._pages.get(self._current_page)
