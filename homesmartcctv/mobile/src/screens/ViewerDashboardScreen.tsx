@@ -103,6 +103,9 @@ export default function ViewerDashboardScreen({ navigation }: Props) {
             onVideos={() =>
               navigation.navigate('VideoPlaylist', { deviceId: device.id, deviceName: device.device_name })
             }
+            onCommands={() =>
+              navigation.navigate('CommandActivity', { deviceId: device.id, deviceName: device.device_name })
+            }
           />
         ))}
       </ScrollView>
@@ -123,6 +126,7 @@ function DeviceCard({
   onHistory,
   onFaces,
   onVideos,
+  onCommands,
 }: {
   device: CameraDevice;
   onView: () => void;
@@ -130,6 +134,7 @@ function DeviceCard({
   onHistory: () => void;
   onFaces: () => void;
   onVideos: () => void;
+  onCommands: () => void;
 }) {
   const online = device.is_online;
 
@@ -217,6 +222,7 @@ function DeviceCard({
           style={styles.buttonHalf}
         />
       </View>
+      <PrimaryButton icon="flash-outline" label="Remote Commands" variant="secondary" onPress={onCommands} />
     </View>
   );
 }

@@ -30,6 +30,24 @@ export function useCameraPeerConnection() {
     pcRef.current = null;
   }, []);
 
+  /**
+   * Switches the live video between the front and back camera (or to `facing`), keeping
+   * the same track, so a connected viewer just sees the picture change. Used by the
+   * viewer's flip button (signaling) and by the SWITCH_CAMERA device command.
+   * Returns the camera now in use, or null when nothing is streaming.
+   */
+  const switchCamera = useCallback(async (facing?: 'front' | 'back'): Promise<'front' | 'back' | null> => {
+    const videoTrack = streamRef.current?.getVideoTracks()[0];
+    if (!videoTrack) return null;
+    const current = videoTrack.getSettings().facingMode === 'user' ? 'front' : 'back';
+    const next = facing ?? (current === 'front' ? 'back' : 'front');
+    if (next !== current) {
+      await videoTrack.applyConstraints({ facingMode: next === 'front' ? 'user' : 'environment' });
+    }
+    setLensFacing(next);
+    return next;
+  }, []);
+
   const handleSignalingMessage = useCallback(
     async (message: SignalingMessage) => {
       const stream = streamRef.current;
@@ -65,14 +83,10 @@ export function useCameraPeerConnection() {
       } else if (message.type === 'peer-left' || message.type === 'replaced') {
         closePeerConnection();
       } else if (message.type === 'switch-camera') {
-        const videoTrack = stream.getVideoTracks()[0];
-        if (!videoTrack) return;
-        const nextFacing = videoTrack.getSettings().facingMode === 'user' ? 'environment' : 'user';
-        await videoTrack.applyConstraints({ facingMode: nextFacing });
-        setLensFacing(nextFacing === 'user' ? 'front' : 'back');
+        await switchCamera();
       }
     },
-    [closePeerConnection],
+    [closePeerConnection, switchCamera],
   );
 
   const start = useCallback(
@@ -109,5 +123,5 @@ export function useCameraPeerConnection() {
     return { width: settings?.width ?? 0, height: settings?.height ?? 0 };
   }, []);
 
-  return { localStreamURL, lensFacing, videoTrackId, start, stop, getVideoTrackDimensions };
+  return { localStreamURL, lensFacing, videoTrackId, start, stop, getVideoTrackDimensions, switchCamera };
 }

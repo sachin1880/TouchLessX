@@ -43,3 +43,30 @@ export interface CameraVideo {
   created_at: string;
   video_path: string;
 }
+
+export type CommandType = 'REFRESH_STATUS' | 'SWITCH_CAMERA' | 'CAPTURE_SNAPSHOT';
+export type CommandStatus =
+  | 'PENDING'
+  | 'DELIVERED'
+  | 'ACKNOWLEDGED'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'EXPIRED'
+  | 'CANCELLED';
+
+export interface DeviceCommand {
+  id: string;
+  camera_device_id: string;
+  command_type: CommandType;
+  parameters: Record<string, unknown> | null;
+  status: CommandStatus;
+  idempotency_key: string;
+  source: string | null;
+  result: Record<string, unknown> | null;
+  error_code: string | null;
+  created_at: string;
+  expires_at: string;
+  delivered_at: string | null;
+  acknowledged_at: string | null;
+  completed_at: string | null;
+}

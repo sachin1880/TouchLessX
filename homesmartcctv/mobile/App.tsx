@@ -19,6 +19,7 @@ import CameraDeviceScreen from './src/screens/CameraDeviceScreen';
 import ViewerDashboardScreen from './src/screens/ViewerDashboardScreen';
 import LiveCameraScreen from './src/screens/LiveCameraScreen';
 import EventHistoryScreen from './src/screens/EventHistoryScreen';
+import CommandActivityScreen from './src/screens/CommandActivityScreen';
 import DetectedFacesScreen from './src/screens/DetectedFacesScreen';
 import VideoPlaylistScreen from './src/screens/VideoPlaylistScreen';
 import VideoPlayerScreen from './src/screens/VideoPlayerScreen';
@@ -61,6 +62,7 @@ function App() {
           <Stack.Screen name="ViewerDashboard" component={ViewerDashboardScreen} />
           <Stack.Screen name="LiveCamera" component={LiveCameraScreen} options={{ presentation: 'fullScreenModal' }} />
           <Stack.Screen name="EventHistory" component={EventHistoryScreen} />
+          <Stack.Screen name="CommandActivity" component={CommandActivityScreen} />
           <Stack.Screen name="DetectedFaces" component={DetectedFacesScreen} />
           <Stack.Screen name="VideoPlaylist" component={VideoPlaylistScreen} />
           <Stack.Screen

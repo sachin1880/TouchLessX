@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Alert, ScrollView, Pressable, findNodeHandle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DeviceInfo from 'react-native-device-info';
@@ -10,13 +10,16 @@ import type { RootStackParamList } from '../navigation/types';
 import Card from '../components/Card';
 import PrimaryButton from '../components/PrimaryButton';
 import CameraDeviceModule from '../native/CameraDeviceNative';
+import MediaCaptureModule from '../native/MediaCaptureNative';
 import { colors, spacing, typography, radii } from '../theme';
-import { registerDevice, sendHeartbeat, startCameraRemote, stopCameraRemote } from '../api/devices';
+import { registerDevice, sendHeartbeat, startCameraRemote, stopCameraRemote, uploadCapture } from '../api/devices';
 import { ApiError } from '../api/client';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { useCameraPeerConnection } from '../webrtc/useCameraPeerConnection';
 import { usePersonDetection } from '../hooks/usePersonDetection';
 import { useContinuousRecording } from '../hooks/useContinuousRecording';
+import { useDeviceCommands } from '../commands/useDeviceCommands';
+import { CommandFailure, type Executors } from '../commands/commandProcessor';
 import {
   requestCameraPermission,
   requestMicrophonePermission,
@@ -48,6 +51,7 @@ export default function CameraDeviceScreen({ navigation }: Props) {
     start: startPeer,
     stop: stopPeer,
     getVideoTrackDimensions,
+    switchCamera,
   } = useCameraPeerConnection();
 
   usePersonDetection(
@@ -133,11 +137,49 @@ export default function CameraDeviceScreen({ navigation }: Props) {
         camera_status: cameraStatus,
       });
       setDevice(updated);
+      return updated;
     } catch {
       // Expected during a network blip - the backend marks the device offline once the
       // missed-heartbeat window elapses, and we'll catch up on the next tick.
+      return null;
     }
   }, [networkStatus, cameraStatus]);
+
+  // Remote device commands (from TouchlessX or the viewer). Each executor reports what
+  // actually happened - a command only succeeds if the camera really did it.
+  const commandExecutors = useMemo<Executors>(
+    () => ({
+      REFRESH_STATUS: async () => {
+        const updated = await sendHeartbeatTick();
+        if (!updated) throw new CommandFailure('heartbeat_failed');
+        return {
+          battery_level: updated.battery_level,
+          network_status: updated.network_status,
+          camera_status: updated.camera_status,
+        };
+      },
+      SWITCH_CAMERA: async (command) => {
+        if (cameraStatus !== 'STREAMING') throw new CommandFailure('camera_not_streaming');
+        const facing = command.parameters?.facing as 'front' | 'back' | undefined;
+        const now = await switchCamera(facing);
+        if (!now) throw new CommandFailure('camera_not_streaming');
+        return { facing: now };
+      },
+      CAPTURE_SNAPSHOT: async () => {
+        const deviceId = deviceIdRef.current;
+        const tag = findNodeHandle(previewRef.current);
+        if (cameraStatus !== 'STREAMING' || !tag || !deviceId) throw new CommandFailure('camera_not_streaming');
+        const fileUri = await MediaCaptureModule.captureView(tag);
+        const event = await uploadCapture(deviceId, fileUri, 'MANUAL_CAPTURE');
+        return { event_id: event.id };
+      },
+    }),
+    [cameraStatus, sendHeartbeatTick, switchCamera],
+  );
+  const { lastProcessed: lastCommand, connected: controlConnected } = useDeviceCommands(
+    device?.id ?? null,
+    commandExecutors,
+  );
 
   useEffect(() => {
     // Gated on `registering` (flips once) and `deviceIdRef`, never on `device` itself -
@@ -301,8 +343,13 @@ export default function CameraDeviceScreen({ navigation }: Props) {
             icon="pulse-outline"
             label="Last Heartbeat"
             value={formatTimeOfDay(device?.last_seen ?? null)}
-            last
           />
+          <InfoRow
+            icon="radio-outline"
+            label="Remote Control"
+            value={controlConnected ? 'Connected' : 'Reconnecting...'}
+          />
+          <InfoRow icon="flash-outline" label="Last Command" value={describeCommand(lastCommand)} last />
         </Card>
 
         <Pressable
@@ -350,6 +397,20 @@ function Stat({ icon, label, value }: { icon: string; label: string; value: stri
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
+}
+
+const COMMAND_NAMES: Record<string, string> = {
+  REFRESH_STATUS: 'Camera Status',
+  SWITCH_CAMERA: 'Flip Camera',
+  CAPTURE_SNAPSHOT: 'Take Snapshot',
+};
+
+function describeCommand(command: { type: string; outcome: string; errorCode?: string; at: number } | null): string {
+  if (!command) return 'None yet';
+  const name = COMMAND_NAMES[command.type] ?? command.type;
+  const time = formatTimeOfDay(new Date(command.at).toISOString());
+  if (command.outcome === 'succeeded') return `${name} ✓ ${time}`;
+  return `${name} ✗ ${command.errorCode ?? command.outcome} ${time}`;
 }
 
 function InfoRow({

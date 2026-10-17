@@ -8,6 +8,7 @@ export type RootStackParamList = {
   ViewerDashboard: undefined;
   LiveCamera: { deviceId: string; deviceName: string };
   EventHistory: { deviceId: string; deviceName: string };
+  CommandActivity: { deviceId: string; deviceName: string };
   DetectedFaces: { deviceId: string; deviceName: string };
   VideoPlaylist: { deviceId: string; deviceName: string };
   VideoPlayer: { deviceId: string; videoId: string; deviceName: string };
