@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     # single-camera app, and 2 days of 1-minute clips is already tens of GB.
     video_retention_days: int = 2
 
+    # Device commands (see services/commands.py). A command the camera hasn't accepted by
+    # its expiry is EXPIRED; one it accepted but never reported back on within the grace
+    # period is FAILED, so nothing stays "in progress" forever.
+    command_default_ttl_seconds: int = 60
+    command_max_ttl_seconds: int = 300
+    command_result_grace_seconds: int = 120
+    # Unfinished commands allowed per device at once - a stuck gesture or a retry loop
+    # can't pile up work for a camera that is offline.
+    command_max_open_per_device: int = 10
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
