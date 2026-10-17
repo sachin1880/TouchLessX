@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Release builds block plaintext HTTP by default (Android's usesCleartextTraffic=false),
+  which is correct - production must use HTTPS (see SECURITY.md). This carves out a narrow,
+  explicit exception for the local dev backend only, so a release APK can be tested against
+  it without weakening the policy for anything else. Remove these domains once the backend
+  is deployed behind HTTPS.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Dev machine's LAN IP - must match DEV_MACHINE_LAN_IP in src/api/client.ts -->
+        <domain includeSubdomains="false">192.168.29.191</domain>
+        <!-- Android emulator's alias for the host machine's localhost -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <!-- Metro's dev bundle loader talks to localhost over `adb reverse` on a USB-connected
+             physical device (debug builds only - see AndroidManifest.xml's per-build-type
+             usesCleartextTraffic flag for why this only matters in practice for release). -->
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
