@@ -18,12 +18,13 @@ from src.voice import parse_command
 from tests.test_features import _controller, _Clock
 
 SERVER = "http://localhost:8000/api"
+JPEG = b"\xff\xd8 a jpeg"
 
 
 # ------------------------------------------------------------------ fakes
 class _Response:
-    def __init__(self, body):
-        self._raw = json.dumps(body).encode() if body is not None else b""
+    def __init__(self, body, raw=None):
+        self._raw = raw if raw is not None else json.dumps(body).encode() if body is not None else b""
 
     def read(self):
         return self._raw
@@ -43,6 +44,10 @@ class FakeServer:
         self.fail_network = 0       # the next N requests fail before reaching the server
         self.statuses = ["DELIVERED", "ACKNOWLEDGED", "SUCCEEDED"]
         self.refuse = None          # (code, detail) to answer the next command creation with
+        self.command_type = ""
+        self.image_missing = False  # the snapshot's photo has expired on the server
+        self.photos = []            # (event id, event type, ISO time) still on the server
+        self.has_video = False
 
     def __call__(self, request, timeout):
         body = json.loads(request.data) if request.data else None
@@ -64,10 +69,29 @@ class FakeServer:
                 code, detail = self.refuse
                 raise urllib.error.HTTPError(request.full_url, code, "no", {},
                                              io.BytesIO(json.dumps({"detail": detail}).encode()))
+            self.command_type = body["command_type"]
             return _Response({"id": "cmd-1", "status": "PENDING"})
         if path.startswith("/commands/"):
             status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
-            return _Response({"id": "cmd-1", "status": status, "error_code": None})
+            result = {"event_id": "ev-1"} if status == "SUCCEEDED" and self.command_type == "CAPTURE_SNAPSHOT" else None
+            return _Response({"id": "cmd-1", "status": status, "error_code": None, "result": result})
+        if path == "/devices/cam-1/captures/ev-1/image":
+            if self.image_missing:
+                raise urllib.error.HTTPError(request.full_url, 404, "no", {},
+                                             io.BytesIO(b'{"detail":"Capture has expired"}'))
+            return _Response(None, raw=JPEG)
+        if path == "/devices/cam-1/events?image_only=true&limit=200":
+            return _Response([{"id": e, "event_type": t, "timestamp": at} for e, t, at in self.photos])
+        if path == "/devices/cam-1/videos?limit=200":
+            return _Response([{"id": "vid-1", "started_at": "2026-10-17T05:00:00Z", "duration_seconds": 60}]
+                             if self.has_video else [])
+        if path.startswith("/devices/cam-1/captures/") and path.endswith("/image"):
+            event_id = path.split("/")[4]
+            if event_id not in {e for e, _t, _at in self.photos}:
+                raise urllib.error.HTTPError(request.full_url, 404, "no", {}, io.BytesIO(b"{}"))
+            return _Response(None, raw=b"jpeg-" + event_id.encode())
+        if path == "/webrtc/ice-servers":
+            return _Response({"ice_servers": [{"urls": "stun:stun.l.google.com:19302"}]})
         if path.endswith("/cancel"):
             return _Response({"id": "cmd-1", "status": "CANCELLED"})
         raise AssertionError(f"unexpected request {path}")
@@ -297,3 +321,234 @@ def test_voice_phrases():
     assert parse_command("camera status").action == "cctv:refresh_status"
     assert parse_command("confirm").action == "confirm"
     assert parse_command("switch app").action == "switch_app"
+
+
+# ------------------------------------------------------------------ snapshots
+def test_a_successful_snapshot_is_downloaded_for_the_page():
+    service, server, _ = _signed_in_service()
+    assert service.snapshot()["last_snapshot"] is None
+    service.send("capture_snapshot")
+    assert _until(lambda: service.snapshot()["last_snapshot"] is not None)
+    snapshot = service.snapshot()["last_snapshot"]
+    assert snapshot.image == JPEG and snapshot.device_name == "Living Room"
+    assert service.snapshot()["recent"][0].result == {"event_id": "ev-1"}
+
+
+def test_other_commands_download_nothing():
+    service, server, _ = _signed_in_service()
+    service.send("switch_camera")
+    assert _until(lambda: service.snapshot()["recent"][0].status == "SUCCEEDED")
+    time.sleep(0.1)
+    assert service.snapshot()["last_snapshot"] is None
+    assert not [r for r in server.requests if "/captures/" in r[1]]
+
+
+def test_a_snapshot_that_cant_be_downloaded_still_succeeded():
+    service, server, _ = _signed_in_service()
+    server.image_missing = True
+    service.send("capture_snapshot")
+    assert _until(lambda: "couldn't be downloaded" in service.snapshot()["message"])
+    assert service.snapshot()["recent"][0].status == "SUCCEEDED"
+    assert service.snapshot()["last_snapshot"] is None
+
+
+# ------------------------------------------------------------------ live view
+from src import cctv_live  # noqa: E402
+from src.cctv_live import LiveView, parse_candidate, signaling_url  # noqa: E402
+from src.ui_cctv import fit  # noqa: E402
+
+
+def test_the_live_view_session_needs_a_sign_in_and_a_camera():
+    service, _, _ = _service()
+    assert service.live_session() is None
+    service, _, _ = _signed_in_service()
+    assert service.live_session() == (SERVER, "tok-123", "cam-1")
+    assert service.ice_servers() == ["stun:stun.l.google.com:19302"]
+
+
+def test_signaling_urls():
+    assert signaling_url(SERVER, "a b/c", "cam-1") == \
+        "ws://localhost:8000/api/devices/cam-1/signal?token=a%20b%2Fc&role=viewer"
+    assert signaling_url("https://cams.example.com/api/", "t", "cam-1").startswith(
+        "wss://cams.example.com/api/devices/cam-1/signal?")
+
+
+def test_trickled_candidates_are_parsed():
+    candidate = parse_candidate({"candidate": "candidate:842163049 1 udp 1677729535 192.168.29.192 50734 typ srflx "
+                                              "raddr 0.0.0.0 rport 0", "sdpMid": "0", "sdpMLineIndex": 0})
+    assert (candidate.ip, candidate.port, candidate.type, candidate.sdpMid) == ("192.168.29.192", 50734, "srflx", "0")
+    assert parse_candidate({"candidate": ""}) is None  # end of candidates
+    assert parse_candidate({"candidate": "candidate:nonsense"}) is None
+
+
+def test_frames_fit_their_box_keeping_proportions():
+    assert fit((1280, 720), (640, 360)) == (640, 360)
+    assert fit((360, 640), (640, 360)) == (202, 360)  # a portrait phone camera
+
+
+class FakeSignaling:
+    """Plays the backend's signaling relay: hands out `incoming`, records what's sent."""
+
+    def __init__(self, incoming=(), refuse=None, hold=False):
+        self.incoming, self.refuse, self.hold = list(incoming), refuse, hold
+        self.sent, self.urls = [], []
+
+    def __call__(self, url, **options):
+        self.urls.append(url)
+        return self
+
+    async def __aenter__(self):
+        if self.refuse:
+            raise self.refuse
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def send(self, text):
+        self.sent.append(json.loads(text))
+
+    def __aiter__(self):
+        return self._messages()
+
+    async def _messages(self):
+        import asyncio
+        for message in self.incoming:
+            yield json.dumps(message)
+            await asyncio.sleep(0.05)
+        while self.hold:
+            await asyncio.sleep(0.05)
+
+
+def _watch(signaling, until):
+    view = LiveView(connect=signaling)
+    view.start(SERVER, "tok-123", "cam-1")
+    assert _until(lambda: until(view), timeout=8.0), view.status()
+    return view
+
+
+def test_the_live_view_offers_to_receive_video_only():
+    signaling = FakeSignaling([{"type": "peer-joined", "role": "camera"}], hold=True)
+    view = _watch(signaling, lambda v: signaling.sent)
+    offer = signaling.sent[0]
+    assert offer["type"] == "offer" and "m=video" in offer["sdp"] and "a=recvonly" in offer["sdp"]
+    assert "m=audio" not in offer["sdp"]  # never the room's sound
+    assert view.status()[0] == cctv_live.NEGOTIATING
+    assert signaling.urls == ["ws://localhost:8000/api/devices/cam-1/signal?token=tok-123&role=viewer"]
+    view.stop()
+    assert view.status()[0] == cctv_live.IDLE and not view.running
+
+
+def test_another_viewer_takes_over():
+    view = _watch(FakeSignaling([{"type": "replaced"}]), lambda v: v.status()[0] == cctv_live.REPLACED)
+    assert not view.running
+
+
+def test_waiting_for_the_camera_until_it_joins():
+    view = _watch(FakeSignaling([], hold=True), lambda v: v.status()[0] == cctv_live.WAITING)
+    assert view.frame() == (0, None)
+    view.stop()
+
+
+def test_an_unreachable_server_is_reported():
+    view = _watch(FakeSignaling(refuse=OSError("no route")), lambda v: v.status()[0] == cctv_live.FAILED)
+    assert "Can't reach" in view.status()[1]
+
+
+def test_a_refused_sign_in_is_reported():
+    class Refused(Exception):
+        response = type("R", (), {"status_code": 403})()
+
+    view = _watch(FakeSignaling(refuse=Refused()), lambda v: v.status()[0] == cctv_live.FAILED)
+    assert "sign in again" in view.status()[1]
+
+
+def test_a_stopped_view_never_updates_again():
+    signaling = FakeSignaling([], hold=True)
+    view = _watch(signaling, lambda v: v.status()[0] == cctv_live.WAITING)
+    view.stop()
+    signaling.hold = False  # the old session now ends; it must not report "Disconnected"
+    time.sleep(0.3)
+    assert view.status()[0] == cctv_live.IDLE
+
+
+def test_a_wrong_password_says_so_in_red():
+    service, server, store = _service()
+    service.sign_in("me@example.com", "wrong")
+    assert _until(lambda: service.snapshot()["message"] == "Wrong email or password")
+    assert service.snapshot()["error"] and not service.signed_in
+    service.sign_in("me@example.com", "right")
+    assert _until(lambda: service.snapshot()["devices"])
+    assert not service.snapshot()["error"]  # a later success clears the red
+
+
+# ------------------------------------------------------------------ gallery
+from datetime import datetime as _dt, timezone as _tz  # noqa: E402
+
+from src.ui_cctv_gallery import visible, when  # noqa: E402
+
+
+def _gallery_after_refresh(service):
+    started = service.gallery_snapshot().loaded_at
+    service.refresh_gallery()
+    assert _until(lambda: not service.gallery_snapshot().loading and service.gallery_snapshot().loaded_at != started)
+    return service.gallery_snapshot()
+
+
+def test_the_gallery_lists_photos_and_clips_newest_first():
+    service, server, _ = _signed_in_service()
+    server.photos = [("ev-old", "MANUAL_CAPTURE", "2026-10-16T08:00:00Z"),
+                     ("ev-new", "PERSON_DETECTED", "2026-10-17T06:00:00Z")]
+    server.has_video = True
+    gallery = _gallery_after_refresh(service)
+    assert [(i.kind, i.id) for i in gallery.items] == [("person", "ev-new"), ("video", "vid-1"), ("snapshot", "ev-old")]
+    assert gallery.items[0].image == b"jpeg-ev-new" and gallery.items[1].duration == 60
+    assert not gallery.message
+
+
+def test_photos_are_downloaded_once():
+    service, server, _ = _signed_in_service()
+    server.photos = [("ev-1", "MANUAL_CAPTURE", "2026-10-17T06:00:00Z")]
+    _gallery_after_refresh(service)
+    _gallery_after_refresh(service)
+    assert len([r for r in server.requests if r[1].endswith("/captures/ev-1/image")]) == 1
+
+
+def test_photos_deleted_on_the_server_disappear():
+    service, server, _ = _signed_in_service()
+    server.photos = [("ev-1", "MANUAL_CAPTURE", "2026-10-15T06:00:00Z"), ("ev-2", "MANUAL_CAPTURE", "2026-10-17T06:00:00Z")]
+    _gallery_after_refresh(service)
+    server.photos = server.photos[1:]  # ev-1 passed its 2 days
+    gallery = _gallery_after_refresh(service)
+    assert [i.id for i in gallery.items] == ["ev-2"]
+    assert "ev-1" not in service._photo_cache
+
+
+def test_the_gallery_needs_a_sign_in():
+    service, server, _ = _service()
+    service.refresh_gallery()
+    assert "Sign in" in service.gallery_snapshot().message
+    assert not server.requests
+
+
+def test_signing_out_forgets_the_photos():
+    service, server, _ = _signed_in_service()
+    server.photos = [("ev-1", "MANUAL_CAPTURE", "2026-10-17T06:00:00Z")]
+    _gallery_after_refresh(service)
+    service.sign_out()
+    assert service.gallery_snapshot().items == [] and not service._photo_cache
+
+
+def test_gallery_filters_and_times():
+    service, server, _ = _signed_in_service()
+    server.photos = [("ev-1", "MANUAL_CAPTURE", "2026-10-17T06:00:00Z"), ("ev-2", "PERSON_DETECTED", "2026-10-17T07:00:00Z")]
+    server.has_video = True
+    items = _gallery_after_refresh(service).items
+    assert [i.kind for i in visible(items, "Person detected")] == ["person"]
+    assert [i.kind for i in visible(items, "Videos")] == ["video"]
+    assert len(visible(items, "All")) == 3
+    now = _dt(2026, 10, 17, 12, 0, tzinfo=_tz.utc).astimezone()
+    local = _dt(2026, 10, 17, 10, 0, tzinfo=_tz.utc).astimezone().strftime("%H:%M")
+    assert when("2026-10-17T10:00:00Z", now) == f"Today {local}"
+    assert when("2026-10-16T10:00:00Z", now).startswith("Yesterday ")
+    assert when("not a time") == "unknown time"

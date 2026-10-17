@@ -157,6 +157,17 @@ class HoloDeskPage(Page):
     def build(self) -> None:
         app = self.app
         self._built_at = time.monotonic()
+        enter = card(self.body, border_color=ACCENT)
+        enter.pack(fill="x", padx=12, pady=(4, 8))
+        text = ctk.CTkFrame(enter, fg_color="transparent")
+        text.pack(side="left", fill="x", expand=True, padx=16, pady=12)
+        label(text, "⛶  Holo Mode · full screen", 15, True, color=ACCENT).pack(anchor="w")
+        label(text, "A 3D hologram you handle with bare hands: pinch and move to turn it, flick to spin it, "
+                    "pinch with both hands to zoom and twist, make a fist to explode it. Esc, EXIT or both "
+                    "palms to leave.",
+              11, color=TEXT_DIM, justify="left", wraplength=640).pack(anchor="w")
+        button(enter, "Enter Holo Mode", app.open_holo_mode, "primary", 170, height=40).pack(
+            side="right", padx=16, before=text)  # packed first, so the text can't squeeze it out
         top = ctk.CTkFrame(self.body, fg_color="transparent")
         top.pack(fill="x", padx=12, pady=(4, 8))
         top.grid_columnconfigure((0, 2), weight=3, uniform="top")

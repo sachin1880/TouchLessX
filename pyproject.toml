@@ -16,6 +16,9 @@ dependencies = [
     "sounddevice>=0.4",
     "faster-whisper>=1.0,<2",
     "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
+    "aiortc>=1.9,<2",
+    "websockets>=12,<16",
+    "pyobjc-framework-Vision>=10; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

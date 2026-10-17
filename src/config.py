@@ -97,6 +97,8 @@ DEFAULT_CONFIG = {
     # Holo Desk panel positions: panel id -> [x, y, width, height] in pixels.
     "holo_panels": {},
     "holo_notes": "",
+    # Full-screen Holo mode: panel id -> [x, y] as fractions of the screen.
+    "holo_full_layout": {},
     # Home CCTV (cctv_client.py): the HomeSmartCCTV API address, the account email (not the
     # password - that is never stored) and the camera gestures control. The session token
     # lives in the system credential store, not here.

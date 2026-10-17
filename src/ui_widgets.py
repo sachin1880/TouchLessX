@@ -144,11 +144,10 @@ def button(parent, text: str, command, kind: str = "primary", width: int = 120, 
         "ghost": (PANEL_ALT, BORDER, TEXT),
         "danger": (DANGER_BG, DANGER_HOVER, DANGER_TEXT),
     }[kind]
-    return ctk.CTkButton(
-        parent, text=text, command=command, width=width, height=32, corner_radius=8,
-        fg_color=colors[0], hover_color=colors[1], text_color=colors[2],
-        border_width=1 if kind != "primary" else 0, border_color=BORDER, font=font(12, True), **kwargs,
-    )
+    options = dict(height=32, corner_radius=8, fg_color=colors[0], hover_color=colors[1], text_color=colors[2],
+                   border_width=1 if kind != "primary" else 0, border_color=BORDER, font=font(12, True))
+    options.update(kwargs)  # a caller's own height, colours etc. win over the defaults
+    return ctk.CTkButton(parent, text=text, command=command, width=width, **options)
 
 
 def switch(parent, variable, text: str = "") -> ctk.CTkSwitch:

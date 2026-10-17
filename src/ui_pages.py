@@ -78,7 +78,8 @@ class Page(ctk.CTkFrame):
 
     @staticmethod
     def end(frame: ctk.CTkFrame) -> None:
-        ctk.CTkFrame(frame, fg_color="transparent", height=8).pack()
+        # Kept off the card's bottom edge: a spacer touching it would paint over the border.
+        ctk.CTkFrame(frame, fg_color="transparent", height=6).pack(pady=(0, 3))
 
     @staticmethod
     def note(parent, text: str, color=TEXT_DIM) -> ctk.CTkLabel:

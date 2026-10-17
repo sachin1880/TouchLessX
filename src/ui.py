@@ -44,6 +44,9 @@ from .assistant import (
 from .voice import Transcriber, VoiceListener, command_vocabulary, installed_apps, parse_command
 from .ui_pages import PAGES, action_label
 from .cctv_client import CctvService
+from .cctv_live import LiveView
+from .ui_holo_mode import HoloMode
+from .ui_air_notes import AirNotesPage
 from .ui_cctv import HomeCctvPage
 from .ui_holo import HoloDeskPage
 from .ui_keyboard import KeyboardWindow
@@ -61,6 +64,7 @@ __version__ = "1.3.0"
 NAV_ITEMS = [
     ("Dashboard", "Live overview", "⌂"),
     ("Holo Desk", "JARVIS workspace", "◈"),
+    ("Air Notes", "Write & draw in the air", "✍"),
     ("Learn", "Guided gesture lesson", "🎓"),
     ("Gesture Studio", "Mappings, sensitivity, practice", "✋"),
     ("Training Studio", "Teach your own gestures", "◉"),
@@ -98,6 +102,7 @@ _RECORD_LIMIT = 300  # samples per recording run; it stops by itself there
 PREVIEW_PAGES = ("Dashboard", "Training Studio", "Learn", "Face Control", "Holo Desk")
 PAGES["Holo Desk"] = HoloDeskPage
 PAGES["Home CCTV"] = HomeCctvPage
+PAGES["Air Notes"] = AirNotesPage
 REST_EDGE = 0.98  # wrist this low in the frame = a resting hand (chosen from recorded real use)
 
 
@@ -171,6 +176,12 @@ class App(ctk.CTk):
         if self.cctv.signed_in:
             self.cctv.refresh_devices()
         self.action_controller.callbacks["cctv"] = self.cctv.send
+        # Live video from the selected camera, on its own thread; only while the page is open.
+        self.cctv_live = LiveView(ice_servers=self.cctv.ice_servers)
+        # Full-screen Holo mode (ui_holo_mode.py) while it is open; read by the tracking thread.
+        self._holo_mode = None
+        # A page that takes the hand itself (Air Notes while writing); read by the tracking thread.
+        self._hand_sink = None
         # Native window management (move / resize / snap the front window).
         self.action_controller.window_manager = WindowManager()
         # The virtual keyboard: a pinch over it types a key instead of clicking.
@@ -1211,6 +1222,11 @@ class App(ctk.CTk):
             current.grid_remove()
         if self._current_page == "Training Studio" and name != "Training Studio":
             self.stop_recording()
+        if self._current_page == "Air Notes" and name != "Air Notes":
+            self._hand_sink = None  # gestures control the Mac again
+            self.gesture_engine.reset()
+        if self._current_page == "Home CCTV" and name != "Home CCTV":
+            self.cctv_live.stop()  # the camera serves one viewer; don't hold it from a hidden page
         self._current_page = name
         self._highlight_nav(name)
         self._update_dry_run()
@@ -1486,7 +1502,13 @@ class App(ctk.CTk):
             frame_times.append(started)
 
             face = None
-            if self._face_mode:
+            if self._face_mode and self._hand_target() is not None:
+                # Face Control moves the pointer itself; behind the hologram that would click
+                # blind, so it sits out (the hologram says to switch it off).
+                result, dispatch = None, None
+                event = self.gesture_engine.update(None, started)
+                self._hand_target().feed(frame, None, event, started)
+            elif self._face_mode:
                 result = None
                 face, event, dispatch = self._face_step(frame, started)
             else:
@@ -1495,10 +1517,17 @@ class App(ctk.CTk):
                 event = self.gesture_engine.update(result, started)
                 if self._current_page == "Learn":
                     self._events.put(("lesson", event, started))  # every frame: a flick lasts only one
-                try:
-                    dispatch = self.action_controller.dispatch(event)
-                except Exception:
-                    dispatch = None  # an OS input hiccup must not take tracking down with it
+                holo = self._hand_target()
+                if holo is not None:
+                    # Full-screen Holo mode works the hologram directly: no gesture moves the
+                    # mouse or presses anything behind it.
+                    holo.feed(frame, result, event, started)
+                    dispatch = None
+                else:
+                    try:
+                        dispatch = self.action_controller.dispatch(event)
+                    except Exception:
+                        dispatch = None  # an OS input hiccup must not take tracking down with it
             latency_ms = (time.monotonic() - started) * 1000.0
 
             fps = 0.0
@@ -1809,7 +1838,33 @@ class App(ctk.CTk):
             return
         self.quit_app()
 
+    def _hand_target(self):
+        """Who gets the hand instead of the action controller: Holo mode, or a page such
+        as Air Notes - None when gestures control the Mac as usual. (Explicit `is None`
+        tests: a Tk widget's truth value isn't something to rely on.)"""
+        return self._holo_mode if self._holo_mode is not None else self._hand_sink
+
+    def open_holo_mode(self) -> None:
+        """Full-screen hologram worked directly by the hand (see ui_holo_mode.py)."""
+        if self._holo_mode is not None:
+            return
+        self.action_controller.release()  # drop any held mouse button before the gestures go elsewhere
+        if not self._tracking_wanted.is_set():
+            self._auto_retries = 0
+            self.start_tracking()
+        self._holo_mode = HoloMode(self)
+
+    def holo_mode_closed(self, layout: dict | None) -> None:
+        self._holo_mode = None
+        self.gesture_engine.reset()  # a pinch held while leaving must not click on the desktop
+        if layout is not None:
+            self.set_option("holo_full_layout", layout)
+            self._schedule_save()
+
     def quit_app(self) -> None:
+        if self._holo_mode is not None:
+            self._holo_mode.close()
+        self.cctv_live.stop()
         if self.menu_bar is not None:
             self.menu_bar.remove()
             self.menu_bar = None
