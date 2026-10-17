@@ -105,13 +105,6 @@ export default function CameraDeviceScreen({ navigation }: Props) {
           navigation.reset({ index: 0, routes: [{ name: 'Login', params: { role: 'CAMERA_DEVICE' } }] });
           return;
         }
-        if (error instanceof ApiError && error.status === 409) {
-          Alert.alert(
-            'Device already in use',
-            'This phone is already registered as a camera on a different Home Camera account. Log out of that account on this phone first, or use a different phone.',
-          );
-          return;
-        }
         Alert.alert('Could not register device', 'Check that the backend is reachable and try again.');
       } finally {
         if (!cancelled) setRegistering(false);

@@ -152,3 +152,46 @@ def test_create_capture_rejects_unknown_event_type(client, register_and_login):
         headers=session["headers"],
     )
     assert response.status_code == 422
+
+
+def test_expired_captures_are_removed_when_listing_too(client, register_and_login, db_session):
+    session = register_and_login()
+    device = _register_device(client, session["headers"], device_uuid="device-capture-expiry-list").json()
+    stale = client.post(
+        f"/api/devices/{device['id']}/captures",
+        files={"file": ("capture.jpg", _fake_jpeg_bytes(), "image/jpeg")},
+        headers=session["headers"],
+    ).json()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=get_settings().capture_retention_days + 1)
+    db_session.query(CameraEvent).filter(CameraEvent.id == stale["id"]).update({"created_at": cutoff})
+    db_session.commit()
+
+    # No new upload (camera off): looking at the history alone removes it.
+    events = client.get(f"/api/devices/{device['id']}/events", headers=session["headers"]).json()
+    assert stale["id"] not in [e["id"] for e in events]
+    response = client.get(f"/api/devices/{device['id']}/captures/{stale['id']}/image", headers=session["headers"])
+    assert response.status_code == 404
+
+
+def test_captures_are_kept_for_two_days():
+    assert get_settings().capture_retention_days == 2
+    assert get_settings().video_retention_days == 2
+
+
+def test_image_only_lists_just_photos(client, register_and_login):
+    session = register_and_login()
+    device = _register_device(client, session["headers"], device_uuid="device-capture-image-only").json()
+    client.post(f"/api/devices/{device['id']}/heartbeat", json={"battery_level": 5, "network_status": "WIFI"},
+                headers=session["headers"])  # LOW_BATTERY / DEVICE_ONLINE: no image
+    for event_type in ("MANUAL_CAPTURE", "PERSON_DETECTED"):
+        client.post(
+            f"/api/devices/{device['id']}/captures",
+            files={"file": ("capture.jpg", _fake_jpeg_bytes(), "image/jpeg")},
+            data={"event_type": event_type},
+            headers=session["headers"],
+        )
+    everything = client.get(f"/api/devices/{device['id']}/events", headers=session["headers"]).json()
+    photos = client.get(f"/api/devices/{device['id']}/events?image_only=true", headers=session["headers"]).json()
+    assert len(everything) > len(photos)
+    assert sorted(e["event_type"] for e in photos) == ["MANUAL_CAPTURE", "PERSON_DETECTED"]
+    assert all(e["image_path"] for e in photos)

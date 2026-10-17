@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # being deleted for good (both the file and its event record) - this is a personal
     # camera app, not a video-storage service, so retention is deliberately short.
     media_root: str = "media"
-    capture_retention_days: int = 3
+    capture_retention_days: int = 2
 
     # Continuous recording: the camera uploads one ~60s video segment at a time while
     # streaming. Kept much shorter than a real NVR's retention - this is a personal

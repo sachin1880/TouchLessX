@@ -21,6 +21,25 @@ def test_register_device(client, register_and_login):
     assert body["camera_status"] == "IDLE"
 
 
+def test_registering_the_same_phone_again_on_one_account_reuses_its_camera(client, register_and_login):
+    session = register_and_login()
+    first = _register_device(client, session["headers"], device_uuid="phone-reuse").json()
+    again = _register_device(client, session["headers"], device_uuid="phone-reuse").json()
+    assert again["id"] == first["id"]
+    assert len(client.get("/api/devices", headers=session["headers"]).json()) == 1
+
+
+def test_one_phone_can_be_a_camera_on_several_accounts(client, register_and_login):
+    first, second = register_and_login(), register_and_login()
+    a = _register_device(client, first["headers"], device_uuid="phone-shared")
+    b = _register_device(client, second["headers"], device_uuid="phone-shared")
+    assert a.status_code == 201 and b.status_code == 201
+    assert a.json()["id"] != b.json()["id"]  # separate cameras, one per account
+    # and neither account can reach the other's
+    assert client.get(f"/api/devices/{a.json()['id']}", headers=second["headers"]).status_code == 403
+    assert [d["id"] for d in client.get("/api/devices", headers=second["headers"]).json()] == [b.json()["id"]]
+
+
 def test_list_devices_only_returns_own_devices(client, register_and_login):
     owner = register_and_login()
     other = register_and_login()

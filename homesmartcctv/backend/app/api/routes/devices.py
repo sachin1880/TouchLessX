@@ -61,12 +61,14 @@ def register_device(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> CameraDevice:
-    existing = db.query(CameraDevice).filter(CameraDevice.device_uuid == payload.device_uuid).first()
+    # Registrations are per account: the same phone signed in to another account gets its
+    # own, separate camera there, and never sees or touches this account's one.
+    existing = (
+        db.query(CameraDevice)
+        .filter(CameraDevice.user_id == current_user.id, CameraDevice.device_uuid == payload.device_uuid)
+        .first()
+    )
     if existing:
-        if existing.user_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT, detail="Device already registered to another account"
-            )
         device = existing
         device.device_name = payload.device_name
         device.platform = payload.platform
@@ -153,14 +155,20 @@ def stop_camera(
 def list_events(
     device_id: uuid.UUID,
     limit: int = 50,
+    image_only: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[CameraEvent]:
     device = _get_owned_device(db, device_id, current_user)
     limit = max(1, min(limit, 200))
+    # Also on read, not only on upload: with the camera off nothing is uploaded, and photos
+    # past their retention must still disappear rather than linger until the next capture.
+    cleanup_expired_captures(db)
+    query = db.query(CameraEvent).filter(CameraEvent.camera_device_id == device.id)
+    if image_only:
+        query = query.filter(CameraEvent.event_type.in_(IMAGE_BACKED_EVENT_TYPES))
     events = (
-        db.query(CameraEvent)
-        .filter(CameraEvent.camera_device_id == device.id)
+        query
         .order_by(CameraEvent.timestamp.desc())
         .limit(limit)
         .all()
@@ -260,6 +268,7 @@ def list_videos(
 ) -> list[CameraVideo]:
     device = _get_owned_device(db, device_id, current_user)
     limit = max(1, min(limit, 200))
+    cleanup_expired_videos(db)  # see list_events: retention holds even with no new uploads
     videos = (
         db.query(CameraVideo)
         .filter(CameraVideo.camera_device_id == device.id)

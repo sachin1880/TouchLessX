@@ -78,6 +78,37 @@ All endpoints need `Authorization: Bearer <token>` and ownership of the device
 Known limits for this phase (planned for Phase 6): the camera and viewer use the same
 user account; tokens on the phones are in AsyncStorage; local traffic is plain HTTP.
 
+## Live view and snapshots in TouchlessX
+
+Added after Phase 1, on the Home CCTV page:
+
+* **Live view** (`touchlessx/src/cctv_live.py`): TouchlessX joins the backend's existing
+  signaling relay as the `viewer`, exactly like the phone viewer app, and receives the
+  camera's video over WebRTC (`aiortc`). Video only, never audio. Video goes straight
+  from phone to Mac; the backend only relays the offer, answer and candidates. It runs
+  on its own thread and stops when you leave the page.
+* **One viewer per camera** (unchanged backend rule): watching in TouchlessX closes the
+  phone viewer app's live view, and the other way round. The page shows "Closed".
+* **Latest snapshot**: when *Take Snapshot* succeeds, TouchlessX downloads the photo
+  (`GET /devices/{id}/captures/{event_id}/image`) and shows it. If the download fails,
+  the command still counts as succeeded and the page says the photo couldn't be loaded.
+* **Gallery** (`touchlessx/src/ui_cctv_gallery.py`): every snapshot, person detection
+  and video clip the selected camera still has on the server, newest first, with
+  filters, a large viewer (◀ ▶, Save…) and clips opened in the Mac's video player.
+  Loaded on its own thread; photos are downloaded once and forgotten on sign-out.
+  Backend support: `GET /devices/{id}/events?image_only=true`.
+* **Retention is 2 days** for photos and clips (`CAPTURE_RETENTION_DAYS=2`,
+  `VIDEO_RETENTION_DAYS=2`), and expired media is now also deleted when the history is
+  read, not only when a new photo arrives - so it goes even while the camera is off.
+* **One phone, several accounts**: a phone's registration is per account (unique on
+  `user_id` + `device_uuid`, migration `f3c7a9e1b2d4`), so the same phone can be a
+  camera on more than one account; accounts still never see each other's cameras.
+* Known gap: continuous video recording is switched off on the phone (the native
+  recorder writes uncompressed frames, 100-200 MB a minute). The gallery shows clips as
+  soon as it is re-enabled with a real H.264 encoder.
+* New dependencies: `aiortc`, `websockets` (in `requirements.txt` / `pyproject.toml`).
+  Without them, everything else on the page works and the live view says what to install.
+
 ## Running it locally
 
 1. **Backend** (`homesmartcctv/backend`, its own `.venv`, `.env` with a random JWT
@@ -102,10 +133,10 @@ user account; tokens on the phones are in AsyncStorage; local traffic is plain H
 |---|---|---|
 | Backend | `DATABASE_URL=…/touchless_security_test .venv/bin/python -m pytest` | 67 passed (28 new) |
 | Migration | `alembic upgrade head`, `downgrade -1`, `upgrade head`, `alembic check` | clean round trip, models match |
-| TouchlessX | `.venv/bin/python -m pytest` | 359 passed (26 new) |
+| TouchlessX | `.venv/bin/python -m pytest` | 372 passed (26 new, then 13 for live view and snapshots) |
 | Mobile | `npx jest`, `npx tsc --noEmit`, `npx eslint` | 9 passed (8 new), 0 type errors, 0 lint errors |
 | End to end (simulated camera) | real backend + real TouchlessX client + scripted camera on the control socket | 3 commands confirmed, delivered in 0.06 s, all succeeded, full audit trail |
-| End to end (real phone) | — | pending: needs the Android phone |
+| End to end (real phone) | Android 12 phone (M2010J19CI) on Wi-Fi + real backend + TouchlessX `CctvService` / `LiveView` | Flip Camera succeeded in 1.2 s (back→front→back); Take Snapshot succeeded in 0.6 s and the 62 KB photo downloaded; live view went live in 1.2 s at ~10 frames/s shown. Gesture → confirm → flip from the app UI: pending |
 
 ## Rollback
 
