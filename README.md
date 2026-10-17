@@ -231,6 +231,21 @@ the action then simply does nothing. TouchlessX never moves its own window this 
 Desktop switching uses the Mission Control shortcuts, which must be switched on in
 System Settings → Keyboard → Keyboard Shortcuts → Mission Control.
 
+## Holo mode, Air Notes and Home CCTV
+
+- **Holo mode** (Holo Desk → *Enter Holo Mode*): full screen, your camera becomes the
+  room and a 3D hologram (globe, atom, DNA, knot, arc reactor) floats in it. Pinch and
+  move to turn it and flick it to spin; pinch it to carry and throw it; pinch with both
+  hands to zoom and twist; a fist explodes it; hold one palm still to charge and fire a
+  repulsor blast; both hands open make lightning; swipe for the next model. Sound
+  effects, fingertip trails and a boot-up sequence included. Esc or both palms to leave.
+- **Air Notes**: raise just your index finger to write or draw in the air; a thumbs-up
+  saves the note as a picture plus the handwriting read by macOS, on this Mac.
+- **Home CCTV**: control an old Android phone used as a security camera
+  ([HomeSmartCCTV](homesmartcctv/)) - camera status, flip and snapshot by gesture or
+  voice, live video, and a gallery of snapshots and person detections (kept 2 days).
+  See [docs/home-cctv](docs/home-cctv/README.md).
+
 ## Face Control (hands-free)
 
 Open **Face Control** in the sidebar and switch on **Use Face Control**. The face model
@@ -418,7 +433,9 @@ TouchlessX/
 ├── pyproject.toml, requirements.txt
 ├── TouchlessX.spec           # PyInstaller recipe for the Mac app
 ├── scripts/build_macos.sh    # Builds TouchlessX.app and the .dmg
+├── homesmartcctv/            # HomeSmartCCTV: FastAPI backend + Android camera/viewer app
 ├── docs/
+│   ├── home-cctv/            # Home CCTV integration plan and phase notes
 │   ├── USER_GUIDE.md
 │   ├── PROJECT_DOCUMENTATION.md
 │   ├── QA_CHECKLIST.md       # Manual tests the automated suite cannot cover
@@ -548,3 +565,4 @@ of each project before a commercial release.
   implemented, in one document.
 - [QA checklist](docs/QA_CHECKLIST.md): the manual tests.
 - [Demo video script](docs/DEMO_VIDEO_SCRIPT.md).
+- [Home CCTV integration](docs/home-cctv/README.md): plan, phases and how to run it.
