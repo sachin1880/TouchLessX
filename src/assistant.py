@@ -25,6 +25,15 @@ from urllib.parse import quote, quote_plus
 
 from .voice import VoiceCommand, match_app, parse_command
 
+
+def _lang_instruction(text: str) -> str:
+    """Return the language instruction for the AI system prompt based on detected language."""
+    try:
+        from .agent_lang import detect_language, get_language_instruction
+        return get_language_instruction(detect_language(text))
+    except Exception:
+        return ""
+
 # Sites that can be opened by name. Anything else spoken as "<name> dot com" works too.
 SITES = {
     "youtube": "https://www.youtube.com", "gmail": "https://mail.google.com", "google": "https://www.google.com",
@@ -339,9 +348,15 @@ class LocalAI:
             "preamble, no explanation, no markdown formatting.", max_tokens=600)[:8000]
 
     def answer(self, question: str) -> str:
-        return self.generate(
-            question, "You are a helpful voice assistant. Answer in one to three short sentences that sound "
-            "natural when spoken aloud. If you are not sure, say so. You cannot browse the web or see the "
-            "screen, and you have no information about today's news, weather or prices. If you are asked to "
-            "do something on the computer rather than answer a question, reply only: Sorry, I didn't catch "
-            "that as something I can do - please say it again.", max_tokens=160)[:1200]
+        lang_instr = _lang_instruction(question)
+        system = (
+            "You are a helpful voice assistant (Jarvis). Answer in one to three short sentences "
+            "that sound natural when spoken aloud. If you are not sure, say so. "
+            "You cannot browse the web or see the screen, and you have no information about "
+            "today's news, weather or prices. If you are asked to do something on the computer "
+            "rather than answer a question, reply only: Sorry, I didn't catch that as something "
+            "I can do - please say it again."
+        )
+        if lang_instr:
+            system = lang_instr + " " + system
+        return self.generate(question, system, max_tokens=200)[:1200]

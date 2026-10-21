@@ -272,8 +272,10 @@ class Transcriber:
         self._folder = folder
         self._size = size
         self._model = None
-        # Shown to the recogniser as "what was said before": it spells the wake word and
-        # the names it is likely to hear the way they should come out.
+        # language=None → auto-detect (Hindi, Hinglish, English all work)
+        # language="en" → force English (slightly faster, Hindi won't transcribe)
+        self.language: str | None = None   # default: auto-detect
+        # Shown to the recogniser as "what was said before"
         self.prompt = "Computer, open YouTube and search for a song. Computer, write a mail. Open Gmail."
 
     def transcribe(self, pcm16: bytes) -> str:
@@ -289,8 +291,8 @@ class Transcriber:
             self._model = WhisperModel(self._size, device="cpu", compute_type="int8", download_root=str(self._folder))
         audio = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
         segments, _ = self._model.transcribe(
-            audio, language="en", beam_size=1, condition_on_previous_text=False,
-            # Spells the wake word and the usual destinations the way they should come out.
+            audio, language=self.language, beam_size=1,
+            condition_on_previous_text=False,
             initial_prompt=self.prompt)
         return " ".join(segment.text.strip() for segment in segments).strip()
 

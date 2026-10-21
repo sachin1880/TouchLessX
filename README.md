@@ -14,6 +14,12 @@ cloud, and no video is ever stored or uploaded.
   raised eyebrows right-click, puckered lips open things, an open mouth scrolls.
 - 🎙 **Voice commands**: "computer, scroll down", "computer, open google chrome".
   Recognised offline. An optional local AI assistant can search, type and draft mails.
+- 🤖 **JARVIS AI Agent**: say **"Hey Computer"** to summon a full-screen holographic AI
+  overlay. A glowing circle pulses with a **48-bar audio waveform** when speaking.
+  Supports **Hindi, English and Hinglish** — ask questions in any of the three; the AI
+  replies in the same language with a matching voice. Nine orbital tool icons float
+  around the circle and give one-tap access to AI Chat, Code, Browser, Voice, Phone,
+  Calendar and more. The overlay closes and reopens cleanly on every activation.
 - 🦾 **JARVIS mode**: a holographic **Holo Desk** whose panels you grab and move by
   hand, a cyan HUD theme, a **virtual keyboard** you type on by pinching, and moving,
   resizing and snapping real app windows and switching desktops with gestures.
@@ -231,6 +237,60 @@ the action then simply does nothing. TouchlessX never moves its own window this 
 Desktop switching uses the Mission Control shortcuts, which must be switched on in
 System Settings → Keyboard → Keyboard Shortcuts → Mission Control.
 
+## JARVIS AI Agent
+
+Say **"Hey Computer"** from anywhere in the app to open the full-screen AI overlay.
+
+### Holographic circle
+
+The centrepiece is a flat glowing circle with concentric rings. Each state drives a
+distinct animation:
+
+| State | What you see |
+|---|---|
+| **Listening** | Three rings expand and fade outward like a radar ping |
+| **Speaking** | 48 audio bars radiate from the ring edge, each driven by overlapping sine waves — a live voice waveform |
+| **Thinking** | Two arcs rotate in opposite directions with dashes on a third ring |
+| **Executing** | A progress arc sweeps around the outer ring |
+| **Success** | Five ripple rings burst outward |
+| **Error** | Red tint + jitter |
+
+### Language support
+
+The AI understands and replies in **Hindi, English and Hinglish**. A language bar in the
+header lets you fix it to one language or leave it on **AUTO** (detected per utterance):
+
+| Selector | Behaviour |
+|---|---|
+| AUTO | Detected automatically per question (default) |
+| EN | English only |
+| हि | Hindi only |
+| MIX | Hinglish (Roman-script Hindi + English) |
+
+Voice input is transcribed by Whisper with automatic language detection (no forced
+English). Replies are spoken in the matching language — Hindi via gTTS or macOS's Lekha
+voice, English via Daniel.
+
+### Orbital tool icons
+
+Nine icons orbit the circle in a slow ellipse. Each is a 3-layer glowing circle (outer
+glow → mid glow → dark fill with accent rim). Tap one to switch the AI into that mode:
+
+AI Chat · Code · Control · Files · Browser · Voice · Phone · Calendar · Settings
+
+### Side panels
+
+A live **system panel** on the left shows neural / voice / LLM / memory bars, uptime,
+request count and token count. A **conversation panel** on the right shows the voice
+frequency spectrum and the last six turns of the conversation log.
+
+### "Hey Computer" reliability fix
+
+On macOS, destroying a fullscreen `Toplevel` kills the Space it lives in, which blocks
+the OS from creating a new one for a few seconds. The overlay now uses
+`withdraw()` / `deiconify()` instead, so every "Hey Computer" after the first works
+immediately.
+
 ## Holo mode, Air Notes and Home CCTV
 
 - **Holo mode** (Holo Desk → *Enter Holo Mode*): full screen, your camera becomes the
@@ -297,6 +357,10 @@ run command lines or open files. Voice obeys the emergency stop, the feature swi
 and practice mode, and works with the camera off. Checked against synthesized speech in
 a US and an Indian English voice (61 of 62 commands understood); accuracy with a real
 microphone in a real room has not been measured.
+
+Voice transcription uses **Whisper** with automatic language detection — Hindi, Hinglish
+and English are all understood without switching anything. Say **"Hey Computer"** to open
+the full-screen AI agent and ask in any of these languages.
 
 ### Assistant (free requests)
 
@@ -454,8 +518,16 @@ TouchlessX/
 │   ├── custom_gestures.py    # Landmark features and the check for trained poses
 │   ├── training.py           # Dataset, scikit-learn training, evaluation, model versions
 │   ├── tutorial.py           # The Learn page's lesson steps and progress
-│   ├── voice.py              # Offline speech recognition, wake word, command parser
+│   ├── voice.py              # Offline speech recognition, wake word, command parser (Hindi/EN auto-detect)
 │   ├── assistant.py          # Free requests: web, dictation, mail and answers via a local AI
+│   ├── agent_lang.py         # Language detection (Hindi / English / Hinglish), preference store
+│   ├── agent_tts.py          # TTS: gTTS (Hindi) or macOS voices (Lekha / Daniel)
+│   ├── agent_theme.py        # Per-state colour + animation theme for the AI overlay
+│   ├── agent_context.py      # Conversation context manager for the AI agent
+│   ├── ui_agent_window.py    # Full-screen holographic AI overlay (circle + panels + orbital icons)
+│   ├── ui_avatar_canvas.py   # Animated holographic circle renderer (PIL, 20 fps)
+│   ├── ui_jarvis.py          # JARVIS bridge UI helpers
+│   └── jarvis_bridge.py      # Connects wake-word trigger to the AI agent overlay
 │   ├── profiles.py           # Profile store, presets, import validation
 │   ├── config.py             # Defaults and tolerant loading of settings.json
 │   ├── history.py            # SQLite action history

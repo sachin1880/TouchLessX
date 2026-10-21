@@ -36,6 +36,7 @@ GREEN = (80, 230, 160)
 RED = (255, 90, 90)
 WHITE = (232, 246, 255)
 DIM = (120, 170, 200)
+ORANGE = (255, 140, 30)
 PANEL_FILL = (6, 22, 44, 150)
 TITLE_H = 34
 GLOW = 10                  # a panel's image is this much bigger on every side, for its glow
@@ -445,21 +446,29 @@ class Panel:
 
 
 def default_layout(panels: dict, width: int, height: int) -> dict[str, tuple[float, float]]:
-    """Panel id -> top-left as fractions of the screen: small panels down the left, the
-    model picker and the how-to down the right, the middle left free for the hologram."""
+    """Panel id -> top-left as fractions of the screen: small panels down the left, real-world
+    controls and the JARVIS AI panel down the right, hologram model picker on the right too."""
     gap, top, side = 22, 70, max(24, int(width * 0.025))
-    positions, y = {}, top
+    positions, y_left = {}, top
     for panel_id in ("clock", "system", "music"):
-        positions[panel_id] = (side, y)
-        y += panels[panel_id].h + gap
-    right = width - side - max(panels["models"].w, panels["help"].w)
-    positions["models"] = (right, top)
-    positions["help"] = (right, top + panels["models"].h + gap)
+        positions[panel_id] = (side, y_left)
+        y_left += panels[panel_id].h + gap
+    if "smart_home" in panels:
+        positions["smart_home"] = (side, y_left)
+        y_left += panels["smart_home"].h + gap
+    right_col = [p for p in ("models", "computer", "jarvis") if p in panels]
+    max_w = max(panels[p].w for p in right_col) if right_col else 250
+    right = width - side - max_w
+    y_right = top
+    for panel_id in right_col:
+        positions[panel_id] = (right, y_right)
+        y_right += panels[panel_id].h + gap
     return {k: (x / width, y / height) for k, (x, y) in positions.items()}
 
 
 class HoloScene:
-    def __init__(self, width: int, height: int, apps: list[str], layout: dict | None = None) -> None:
+    def __init__(self, width: int, height: int, apps: list[str], layout: dict | None = None,
+                 smart_home_devices: list[str] | None = None) -> None:
         self.width, self.height = width, height
         self.stats: dict = {}
         self.notice = ""              # a message across the middle, e.g. "Starting the camera…"
@@ -479,6 +488,7 @@ class HoloScene:
         self._fingertip: tuple[float, float] | None = None
         self._cache: dict = {}
         # Effects
+        self._jarvis_text: tuple[str, str] = ("", "")   # (last query, last response) for the JARVIS panel
         self.sounds: list[str] = []   # sound effects due this frame; the window plays and clears them
         self.sound_on = True
         self.trails_on = True
@@ -498,7 +508,7 @@ class HoloScene:
         self._last_swipe = -10.0
         self._render_t = 0.0
         self._rng = np.random.default_rng()
-        self.panels = self._build_panels(apps)
+        self.panels = self._build_panels(apps, smart_home_devices or [])
         positions = default_layout(self.panels, width, height)
         positions.update({k: tuple(v) for k, v in (layout or {}).items() if k in self.panels})
         for panel in self.panels.values():
@@ -509,7 +519,7 @@ class HoloScene:
         self._vignette = self._make_vignette()
 
     # ------------------------------------------------------------- layout
-    def _build_panels(self, apps: list[str]) -> dict[str, Panel]:
+    def _build_panels(self, apps: list[str], smart_home_devices: list[str]) -> dict[str, Panel]:
         w = self.width
         side = int(min(340, max(250, w * 0.2)))
         panels = {
@@ -517,7 +527,8 @@ class HoloScene:
             "system": Panel("system", "SYSTEM", 0, 0, side, 210),
             "music": Panel("music", "MEDIA", 0, 0, side, 150),
             "models": Panel("models", "HOLOGRAM", 0, 0, side, 262),
-            "help": Panel("help", "HANDS", 0, 0, side, 318),
+            "computer": Panel("computer", "COMPUTER", 0, 0, side, 206),
+            "jarvis": Panel("jarvis", "JARVIS", 0, 0, side, 280),
         }
         bw = (side - 2 * 14 - 2 * 8) // 3
         for i, (bid, text, action) in enumerate((("prev", "PREV", "prev_track"), ("play", "PLAY", "play_pause"),
@@ -536,6 +547,33 @@ class HoloScene:
         for i, (bid, text) in enumerate((("sound", "SOUND"), ("trails", "TRAILS"))):
             panels["models"].buttons.append(Button(bid, text, (14 + i * (wide + 8), TITLE_H + 14 + 96, wide, 40),
                                                    "holo:" + bid, GREEN))
+        # COMPUTER panel: real desktop actions, pinch to execute without leaving Holo mode
+        _quick = [
+            ("screenshot", "SCREENSHOT", "quick:screenshot", CYAN),
+            ("switch_app",  "SWITCH APP",  "quick:switch_app",  CYAN),
+            ("new_tab",     "NEW TAB",     "quick:new_tab",     CYAN),
+            ("copy",        "COPY",        "quick:copy",        GREEN),
+            ("paste",       "PASTE",       "quick:paste",       GREEN),
+            ("undo",        "UNDO",        "quick:undo",        GREEN),
+            ("zoom_in",     "ZOOM IN",     "quick:zoom_in",     AMBER),
+            ("zoom_out",    "ZOOM OUT",    "quick:zoom_out",    AMBER),
+            ("close_tab",   "CLOSE TAB",   "quick:close_tab",   RED),
+        ]
+        for i, (bid, text, action, accent) in enumerate(_quick):
+            row, col = divmod(i, 3)
+            panels["computer"].buttons.append(Button(bid, text, (14 + col * (bw + 8), TITLE_H + 14 + row * 48, bw, 40),
+                                                     action, accent))
+        # Smart home devices (if configured)
+        if smart_home_devices:
+            n = min(len(smart_home_devices), 6)
+            rows_needed = (n + 2) // 3
+            sh_h = TITLE_H + 14 + rows_needed * 48 + 14
+            panels["smart_home"] = Panel("smart_home", "SMART HOME", 0, 0, side, sh_h)
+            for i, name in enumerate(smart_home_devices[:6]):
+                row, col = divmod(i, 3)
+                panels["smart_home"].buttons.append(
+                    Button(f"sh{i}", name[:10].upper(), (14 + col * (bw + 8), TITLE_H + 14 + row * 48, bw, 40),
+                           "smart_home:" + name, GREEN))
         entries = [(f"app{i}", name.upper()[:12], "app:" + name) for i, name in enumerate(apps[:4])]
         entries.append(("exit", "EXIT", "exit"))
         dock = Panel("dock", "", 0, 0, 24 + len(entries) * 150, 64)
@@ -552,6 +590,13 @@ class HoloScene:
     def layout(self) -> dict[str, tuple[float, float]]:
         return {p.id: (round(p.x / self.width, 4), round(p.y / self.height, 4))
                 for p in self.panels.values() if p.id != "dock"}
+
+    def set_jarvis(self, query: str, response: str) -> None:
+        """Update the JARVIS panel with the latest voice query and AI/action response."""
+        new = (query[:80].strip(), response[:250].strip())
+        if new != self._jarvis_text:
+            self._jarvis_text = new
+            self._cache.pop("jarvis", None)
 
     def stage(self) -> tuple[float, float, float]:
         """Where the hologram floats: centre x, y and its size in px (radius at scale 1)."""
@@ -1020,6 +1065,8 @@ class HoloScene:
         if panel.id == "models":
             return (hover, flash, self.holo.model, self.mode, round(self.holo.scale, 2), self.sound_on, self.trails_on,
                     round(float(abs(self.holo.spin[0])), 1))
+        if panel.id == "jarvis":
+            return (self._jarvis_text, hover, flash)
         return (hover, flash)
 
     def _panel_image(self, panel: Panel, t: float) -> Image.Image:
@@ -1070,6 +1117,52 @@ class HoloScene:
         box = f.getbbox(button.text)
         colour = (4, 16, 32, 255) if lit else WHITE + (240,)
         draw.text((x + (w - box[2]) / 2, y + (h - box[3]) / 2 - 1), button.text, font=f, fill=colour)
+
+    def _fill_jarvis(self, draw, panel: Panel, pad: int) -> None:
+        query, response = self._jarvis_text
+        y = pad + TITLE_H + 12
+        if response:
+            draw.text((pad + 16, y), "YOU ASKED", font=font(11, "head"), fill=DIM + (255,))
+            q_short = (query[:44] + "…") if len(query) > 44 else query
+            draw.text((pad + 16, y + 18), q_short, font=font(13), fill=AMBER + (220,))
+            # Wrap response into up to 3 lines
+            words, lines, current = response.split(), [], ""
+            for word in words:
+                if len(current) + len(word) + 1 <= 34:
+                    current += (" " if current else "") + word
+                else:
+                    if current:
+                        lines.append(current)
+                    current = word
+                    if len(lines) >= 3:
+                        break
+            if current and len(lines) < 3:
+                lines.append(current)
+            for i, line in enumerate(lines[:3]):
+                draw.text((pad + 16, y + 40 + i * 20), line, font=font(14), fill=WHITE + (240,))
+        else:
+            draw.text((pad + 16, y), "JARVIS", font=font(22, "head"), fill=CYAN + (200,))
+            draw.text((pad + 16, y + 34), "Say 'computer...' to ask", font=font(13), fill=WHITE + (170,))
+            draw.text((pad + 16, y + 54), "anything or give a command", font=font(13), fill=WHITE + (140,))
+        sep_y = pad + TITLE_H + 110
+        draw.line((pad + 14, sep_y, pad + panel.w - 14, sep_y), fill=CYAN + (50,), width=1)
+        # Condensed gesture reference
+        gestures = [("PINCH + MOVE", "spin the hologram"),
+                    ("FIST", "explode | PALM still → blast"),
+                    ("TWO HANDS", "zoom & tilt"),
+                    ("BOTH PALMS / ESC", "exit")]
+        for i, (head, text) in enumerate(gestures):
+            y_g = sep_y + 10 + i * 30
+            draw.text((pad + 16, y_g), head, font=font(12, "head"), fill=CYAN + (230,))
+            draw.text((pad + 16, y_g + 14), text, font=font(12), fill=WHITE + (190,))
+
+    def _fill_computer(self, draw, panel: Panel, pad: int) -> None:
+        draw.text((pad + 16, pad + TITLE_H + 8), "Pinch any button to act on your desktop",
+                  font=font(11, "head"), fill=DIM + (200,))
+
+    def _fill_smart_home(self, draw, panel: Panel, pad: int) -> None:
+        draw.text((pad + 16, pad + TITLE_H + 8), "Pinch to toggle device",
+                  font=font(11, "head"), fill=DIM + (200,))
 
     def _fill_clock(self, draw, panel: Panel, pad: int) -> None:
         clock, date = time.strftime("%H:%M"), time.strftime("%A %d %B")

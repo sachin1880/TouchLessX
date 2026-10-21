@@ -50,6 +50,10 @@ from .ui_air_notes import AirNotesPage
 from .ui_cctv import HomeCctvPage
 from .ui_holo import HoloDeskPage
 from .ui_keyboard import KeyboardWindow
+from .ui_jarvis import JarvisDevPage
+from .jarvis_bridge import JarvisBridge, is_dev_query
+from .ui_agent_window import AgentWindow
+from .agent_context import classify as _classify_mode
 from .virtual_keyboard import KeyboardModel, key_label
 from .window_manager import WindowManager
 from .ui_widgets import (
@@ -103,6 +107,7 @@ PREVIEW_PAGES = ("Dashboard", "Training Studio", "Learn", "Face Control", "Holo 
 PAGES["Holo Desk"] = HoloDeskPage
 PAGES["Home CCTV"] = HomeCctvPage
 PAGES["Air Notes"] = AirNotesPage
+PAGES["JARVIS Dev"] = JarvisDevPage
 REST_EDGE = 0.98  # wrist this low in the frame = a resting hand (chosen from recorded real use)
 
 
@@ -204,6 +209,9 @@ class App(ctk.CTk):
         self.clipboard = ClipboardHistory()
         self.voice: VoiceListener | None = None
         self.local_ai = LocalAI()
+        self.jarvis = JarvisBridge()          # developer agent — loaded lazily when project is opened
+        self._agent_window: AgentWindow | None = None
+        self._agent_mode: str = ""            # context mode from last classified command
         self._voice_waiting_until = 0.0       # after the wake word alone: waiting for the request
         self.voice_apps: dict[str, str] = {}
         self.voice_status = ("off", "")       # (state, detail) from the listener
@@ -691,11 +699,17 @@ class App(ctk.CTk):
         elif kind == "wake":
             self._voice_waiting_until = time.monotonic() + 6.0
             self.voice_result = "Yes? Listening for your request…"
+            self._open_agent_window()
         else:
             request = parse_command(text, self.voice_apps) if kind == "command" else interpret(text, self.voice_apps)
             wants_action = text.lower().lstrip().startswith(_ACTION_STARTS)
             if request is None and kind == "free" and self.config_data["assistant_enabled"] and not wants_action:
                 request = Task("answer", f"Answer: {text[:48]}", text=text)  # a question or remark: ask the AI
+            # Show "thinking" on the agent avatar; classify command for mode colour
+            self._agent_mode = _classify_mode(text)
+            aw = self._agent_window
+            if aw and not aw._closed:
+                aw.set_thinking(text, mode=self._agent_mode)
             if request is None:
                 self.voice_result = f"I didn't understand: \"{text}\""
             elif isinstance(request, Task):
@@ -769,17 +783,52 @@ class App(ctk.CTk):
                 result = self.local_ai.write_email(task.topic, task.to, self.config_data["user_name"])
             elif task.kind == "write_text":
                 result = self.local_ai.write_text(task.text)
+            elif is_dev_query(task.text) and self.jarvis.is_ready():
+                # Route developer/code queries to the JARVIS agent
+                result = self.jarvis.ask(task.text)
+                self._update_jarvis_page(task.text, result)
             else:
                 result = self.local_ai.answer(task.text)
         except AIError as exc:
             result = exc
         self._events.put(("assistant_done", task, result))
 
+    def _update_jarvis_page(self, query: str, result: str) -> None:
+        """Push a query+answer to the JARVIS Dev page chat box if it's open."""
+        try:
+            page = self._pages.get("JARVIS Dev")
+            if page is not None:
+                self.after(0, lambda: page.ask_jarvis(query) if False else page._append_chat("jarvis", result))
+        except Exception:
+            pass
+
+    def _open_agent_window(self) -> None:
+        """Open (or restore) the full-screen humanoid AI agent overlay.
+
+        Reuses the existing window when possible (withdraw/deiconify) to avoid
+        macOS blocking rapid fullscreen Space creation on second activation.
+        """
+        aw = self._agent_window
+        if aw is not None and not aw._closed:
+            aw.set_listening()
+            return
+        if aw is not None and aw._closed:
+            # Window was hidden — reopen it instead of building a new one
+            aw.reopen()
+            aw.set_listening()
+            return
+
+        self._agent_window = AgentWindow(self, on_close=None)
+        self._agent_window.set_listening()
+
     def _finish_task(self, task: Task, result) -> None:
         if self.voice is not None and self.voice_status[0] == "thinking":
             self.voice_status = ("listening", "")
         if isinstance(result, Exception):
             self.voice_result = str(result)
+            aw = self._agent_window
+            if aw and not aw._closed:
+                aw.set_error(str(result))
         elif self.safety.paused:
             self.voice_result = "Stopped while I was working - nothing was done."
         elif task.kind == "write_email":
@@ -797,7 +846,11 @@ class App(ctk.CTk):
         else:
             self._note_voice_action(task.label)
             self.voice_result = result
-            if self.config_data["speak_replies"] and platform.system() == "Darwin" and not self.action_controller.dry_run:
+            aw = self._agent_window
+            if aw and not aw._closed:
+                # Agent window handles TTS itself with avatar animation
+                aw.show_response(str(result), mode=self._agent_mode)
+            elif self.config_data["speak_replies"] and platform.system() == "Darwin" and not self.action_controller.dry_run:
                 try:
                     subprocess.Popen(["say", result[:600]])  # an argument list, never a shell string
                 except OSError:

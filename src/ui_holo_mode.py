@@ -8,9 +8,18 @@ bridge between the tracking thread and the screen:
   one image on a full-screen canvas.
 
 Leave with Esc, the EXIT button, or both open palms held for a moment.
+
+Real-world actions available inside Holo mode:
+  • COMPUTER panel — pinch any button to act on the desktop without leaving (screenshot,
+    switch app, copy/paste, undo, zoom, close tab, new tab)
+  • SMART HOME panel — pinch a device button to fire its webhook
+  • JARVIS panel — shows the last voice command and AI/action response live
+  • MEDIA panel — play/pause, next, volume (already wired)
+  • HOLOGRAM panel — swap the 3D model, sound, trails, reset
 """
 from __future__ import annotations
 
+import platform
 import threading
 import time
 import tkinter as tk
@@ -38,7 +47,9 @@ class HoloMode:
         self.window.attributes("-fullscreen", True)
         self.canvas = tk.Canvas(self.window, width=width, height=height, bg="black", highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
-        self.scene = HoloScene(width, height, list(app.config_data["apps"]), app.config_data["holo_full_layout"])
+        devices = app.smart_home.names() if getattr(app, "smart_home", None) is not None else []
+        self.scene = HoloScene(width, height, list(app.config_data["apps"]),
+                               app.config_data["holo_full_layout"], smart_home_devices=devices)
         self.hands = HandInput(width, height, app.gesture_engine.pinch_threshold)  # the user's own pinch setting
         self._photo = ImageTk.PhotoImage(Image.new("RGB", (width, height)))
         self.canvas.create_image(0, 0, image=self._photo, anchor="nw")
@@ -50,6 +61,7 @@ class HoloMode:
         self._hand = Hand()
         self.sounds = SoundBoard()
         self._closed = False
+        self._last_voice: tuple[str, str] = ("", "")   # (heard, result) last pushed to JARVIS panel
         self.window.bind("<Escape>", lambda _e: self.close())
         self.window.protocol("WM_DELETE_WINDOW", self.close)
         self.window.after(100, self.window.focus_force)
@@ -90,6 +102,13 @@ class HoloMode:
             hand = self._hand if now - self._last_frame_at < 0.3 else Hand()
         else:
             hand = None
+        # Forward voice/AI state to the JARVIS panel whenever it changes.
+        heard = getattr(self.app, "voice_heard", "")
+        result = getattr(self.app, "voice_result", "")
+        current_voice = (heard, result)
+        if current_voice != self._last_voice and (heard or result):
+            self._last_voice = current_voice
+            self.scene.set_jarvis(heard, result)
         if hand is not None:
             self._photo.paste(Image.fromarray(self.scene.render(self._frame, hand, now)))
             self._last_render = now
@@ -105,6 +124,14 @@ class HoloMode:
             return "Starting the camera…" if self.app._tracking_wanted.is_set() else "The camera is off"
         return ""
 
+    # Actions the COMPUTER panel maps to action_controller action IDs.
+    _QUICK_ACTIONS = {
+        "switch_app": "switch_app", "new_tab": "new_tab", "close_tab": "close_tab",
+        "copy": "copy", "paste": "paste", "undo": "undo", "redo": "redo",
+        "zoom_in": "zoom_in", "zoom_out": "zoom_out", "mission": "mission_control",
+        "scroll_up": "scroll_up", "scroll_down": "scroll_down",
+    }
+
     def _perform(self, action: str) -> None:
         kind, _, value = action.partition(":")
         if action == "exit":
@@ -114,6 +141,25 @@ class HoloMode:
         elif kind == "app":
             self.close()  # the app opens on the normal desktop, so step out of the hologram
             self.app.action_controller.run_action(action, force=True)
+        elif kind == "quick":
+            # Execute a desktop action without leaving Holo mode.
+            mapped = self._QUICK_ACTIONS.get(value)
+            if mapped:
+                self.app.action_controller.run_action(mapped, force=True)
+            elif value == "screenshot":
+                # Not in action_controller: fire the OS screenshot key combo directly.
+                if platform.system() == "Darwin":
+                    self.app.executor.hotkey(["command", "shift", "3"])
+                else:
+                    self.app.executor.hotkey(["win", "shift", "s"])
+        elif kind == "smart_home":
+            # Trigger a smart home device webhook by device name.
+            if getattr(self.app, "smart_home", None) is not None:
+                self.app.smart_home.trigger(value)
+        elif kind == "cctv":
+            callback = self.app.action_controller.callbacks.get("cctv")
+            if callback is not None:
+                callback(value)
 
     def _stats_loop(self) -> None:
         while not self._closed:
