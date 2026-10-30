@@ -285,6 +285,17 @@ def interpret(spoken: str, app_names=()) -> Task | VoiceCommand | None:
     if basic is not None and len(text.split()) <= 7:
         return basic  # a short plain command ("scroll down slowly", "next tab")
 
+    # ── Real-time data queries — answer directly without LLM ─────────────────
+    # Checked BEFORE write/question so "gold rate kya hai" doesn't hit the LLM.
+    try:
+        from .agent_realtime import fetch as _rt_fetch, is_realtime_query as _is_rt
+        if _is_rt(spoken):
+            rt_answer = _rt_fetch(spoken)
+            if rt_answer:
+                return Task("answer", f"Live: {text[:40]}", text=rt_answer)
+    except Exception:
+        pass
+
     if re.match(r"(?:write|compose|draft|create|prepare|make)\b", text):
         return Task("write_text", f"Write: {text[:48]}", text=spoken.strip())
     if _QUESTION.match(text):

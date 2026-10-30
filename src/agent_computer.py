@@ -340,6 +340,16 @@ def get_clipboard() -> str:
         return ""
 
 
+def fetch_realtime(query: str) -> str:
+    """Get live data: time, gold rate, weather, stocks, crypto, currency etc."""
+    try:
+        from .agent_realtime import fetch as _fetch
+        result = _fetch(query)
+        return result if result else f"No live data found for: {query}"
+    except Exception as exc:
+        return f"Realtime fetch error: {exc}"
+
+
 # ── convenience URL builders (used in planner system prompt examples) ─────────
 
 def whatsapp_url(message: str, phone: str = "") -> str:
@@ -392,6 +402,7 @@ def execute(action: str, args: dict) -> str:
                                              email=args.get("email", ""))
     elif action == "lookup_contact":     return lookup_contact(args.get("name", ""))
     elif action == "run_applescript":    return run_applescript(args.get("script", ""))
+    elif action == "fetch_realtime":     return fetch_realtime(args.get("query", ""))
     elif action == "speak":              return "spoken"    # handled by caller
     elif action == "done":               return "done"      # handled by caller
     else:                                return f"unknown action: {action}"

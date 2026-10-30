@@ -72,6 +72,10 @@ KEYBOARD & MOUSE:
   click      args: {"x": 500, "y": 400}
   wait       args: {"seconds": 2}
 
+REAL-TIME DATA (no browser needed):
+  fetch_realtime  args: {"query": "gold rate"  | "time" | "weather Delhi" | "sensex" | "bitcoin" | "dollar rate"}
+    — returns live price/data as a string; then speak it to the user
+
 VOICE FEEDBACK:
   speak  args: {"text": "message for the user"}
   done   args: {"result": "final summary for the user"}
