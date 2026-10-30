@@ -54,6 +54,7 @@ from .ui_keyboard import KeyboardWindow
 from .ui_jarvis import JarvisDevPage
 from .jarvis_bridge import JarvisBridge, is_dev_query
 from .ui_agent_window import AgentWindow
+from .ui_siri_wave import SiriWave
 from .agent_context import classify as _classify_mode
 from .virtual_keyboard import KeyboardModel, key_label
 from .window_manager import WindowManager
@@ -212,6 +213,7 @@ class App(ctk.CTk):
         self.local_ai = LocalAI()
         self.jarvis = JarvisBridge()          # developer agent — loaded lazily when project is opened
         self._agent_window: AgentWindow | None = None
+        self._siri_wave: SiriWave | None = None  # Siri-style wake animation
         self._agent_mode: str = ""            # context mode from last classified command
         self._voice_waiting_until = 0.0       # after the wake word alone: waiting for the request
         self.voice_apps: dict[str, str] = {}
@@ -702,6 +704,8 @@ class App(ctk.CTk):
             self.voice_result = "Yes? Listening for your request…"
             self._open_agent_window()
         else:
+            # A voice command arrived — dismiss the Siri wave immediately
+            self._hide_siri_wave()
             request = parse_command(text, self.voice_apps) if kind == "command" else interpret(text, self.voice_apps)
             wants_action = text.lower().lstrip().startswith(_ACTION_STARTS)
             if request is None and kind == "free" and self.config_data["assistant_enabled"] and not wants_action:
@@ -809,9 +813,20 @@ class App(ctk.CTk):
     def _open_agent_window(self) -> None:
         """Open (or restore) the full-screen humanoid AI agent overlay.
 
+        Also shows the Siri-style bottom wave so the user gets immediate
+        visual feedback the moment "Hey Computer" is heard.
+
         Reuses the existing window when possible (withdraw/deiconify) to avoid
         macOS blocking rapid fullscreen Space creation on second activation.
         """
+        # ── Siri wave: instant bottom-of-screen feedback ──────────────────────
+        try:
+            if self._siri_wave is None:
+                self._siri_wave = SiriWave(self)
+            self._siri_wave.show()
+        except Exception:
+            pass
+
         aw = self._agent_window
         if aw is not None and not aw._closed:
             aw.set_listening()
@@ -824,6 +839,14 @@ class App(ctk.CTk):
 
         self._agent_window = AgentWindow(self, on_close=None)
         self._agent_window.set_listening()
+
+    def _hide_siri_wave(self) -> None:
+        """Fade out the Siri wave after the wake-word listening window closes."""
+        try:
+            if self._siri_wave is not None:
+                self._siri_wave.hide()
+        except Exception:
+            pass
 
     def _run_agent_task(self, agent_task: AgentTask) -> None:
         """Launch the multi-step TaskAgent for *agent_task* and wire it to the UI."""

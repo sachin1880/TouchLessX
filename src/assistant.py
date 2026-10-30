@@ -78,6 +78,9 @@ SITES = {
     "notion": "https://www.notion.so", "google meet": "https://meet.google.com", "jiocinema": "https://www.jiocinema.com",
     "jiosaavn": "https://www.jiosaavn.com", "gaana": "https://gaana.com", "naukri": "https://www.naukri.com",
     "google photos": "https://photos.google.com", "google news": "https://news.google.com",
+    # spoken aliases — "email open", "mail open", "outlook open" all → Gmail
+    "email": "https://mail.google.com", "mail": "https://mail.google.com",
+    "outlook": "https://outlook.live.com",
 }
 
 # Where a site's own search lives; for the others a Google search limited to that site is used.
@@ -252,6 +255,21 @@ def interpret(spoken: str, app_names=()) -> Task | VoiceCommand | None:
             # useful thing is to go and find it - never to hand it to the AI as a question.
             return Task("open_url", f"Searched for \"{name}\" (not an app or site I know)", url=web_search(name))
         return None
+
+    # Handle reversed-order commands: "email open", "youtube open", "gmail kholو" etc.
+    # Speech recognisers sometimes flip verb/noun order, especially in Hinglish.
+    match = re.fullmatch(
+        r"(?P<n>.+?)\s+(?:open|launch|start|kholو|kholo|khol|chalo|chalao|start\s+karo|open\s+karo)",
+        text,
+    )
+    if match:
+        name = match["n"].strip()
+        url = site_url(name)
+        if url:
+            return Task("open_url", f"Open {match_site(name) or name}", url=url)
+        app = match_app([w for w in name.split() if w not in ("the", "a", "my")], app_names)
+        if app:
+            return VoiceCommand("open_app", f"Open {app}", app=app)
 
     match = re.fullmatch(r"play (?P<q>.+)", text)
     if match and match["q"] not in _PLAYBACK and not re.search(r"\b(?:next|previous) (?:song|track)\b", text):
