@@ -53,7 +53,7 @@ from .ui_holo import HoloDeskPage
 from .ui_keyboard import KeyboardWindow
 from .ui_jarvis import JarvisDevPage
 from .jarvis_bridge import JarvisBridge, is_dev_query
-from .ui_agent_window import AgentWindow
+from .ui_jarvis_hud import JarvisHUD       # compact floating card (replaces AgentWindow)
 from .ui_siri_wave import SiriWave
 from .agent_context import classify as _classify_mode
 from .virtual_keyboard import KeyboardModel, key_label
@@ -212,7 +212,7 @@ class App(ctk.CTk):
         self.voice: VoiceListener | None = None
         self.local_ai = LocalAI()
         self.jarvis = JarvisBridge()          # developer agent — loaded lazily when project is opened
-        self._agent_window: AgentWindow | None = None
+        self._agent_window: JarvisHUD | None = None
         self._siri_wave: SiriWave | None = None  # Siri-style wake animation
         self._agent_mode: str = ""            # context mode from last classified command
         self._voice_waiting_until = 0.0       # after the wake word alone: waiting for the request
@@ -837,7 +837,7 @@ class App(ctk.CTk):
             aw.set_listening()
             return
 
-        self._agent_window = AgentWindow(self, on_close=None)
+        self._agent_window = JarvisHUD(self)
         self._agent_window.set_listening()
 
     def _hide_siri_wave(self) -> None:
@@ -867,18 +867,12 @@ class App(ctk.CTk):
 
         def _on_speak(text: str) -> None:
             if aw and not aw._closed:
-                aw.show_response(text, mode=self._agent_mode)
-            # Also update heard label immediately
-            if aw and not aw._closed:
-                try:
-                    aw._ic(aw._heard_item, text=text, fill="#ffc844")
-                except Exception:
-                    pass
+                aw.show_response(text)
 
         def _on_done(result: str) -> None:
             self.voice_result = result
             if aw and not aw._closed:
-                aw.show_response(result, mode=self._agent_mode)
+                aw.show_done(result)
             self._sync_voice_ui()
 
         if aw and not aw._closed:
@@ -899,7 +893,7 @@ class App(ctk.CTk):
             self.voice_result = str(result)
             aw = self._agent_window
             if aw and not aw._closed:
-                aw.set_error(str(result))
+                aw.show_error(str(result))
         elif self.safety.paused:
             self.voice_result = "Stopped while I was working - nothing was done."
         elif task.kind == "write_email":
@@ -919,9 +913,8 @@ class App(ctk.CTk):
             self.voice_result = result
             aw = self._agent_window
             if aw and not aw._closed:
-                # Agent window handles TTS itself with avatar animation
-                aw.show_response(str(result), mode=self._agent_mode)
-            elif self.config_data["speak_replies"] and platform.system() == "Darwin" and not self.action_controller.dry_run:
+                aw.show_done(str(result))
+            if self.config_data["speak_replies"] and platform.system() == "Darwin" and not self.action_controller.dry_run:
                 try:
                     subprocess.Popen(["say", result[:600]])  # an argument list, never a shell string
                 except OSError:
