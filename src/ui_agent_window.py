@@ -277,22 +277,44 @@ class AgentWindow:
     def _draw_bg(self, sw: int, sh: int, use_panels: bool) -> None:
         c = self._cv
 
-        # Very subtle grid (near-black lines)
-        for x in range(0, sw, 60):
-            c.create_line(x, 0, x, sh, fill="#07111c", width=1)
-        for y in range(0, sh, 60):
-            c.create_line(0, y, sw, y, fill="#07111c", width=1)
+        # ── Radial glow from screen centre ───────────────────────────────────
+        # Draw concentric rectangles fading from near-black to teal glow centre
+        import math as _math
+        cx, cy = sw // 2, sh // 2
+        for step in range(24, 0, -1):
+            frac  = step / 24
+            rw    = int(sw * 0.05 + sw * 0.55 * (1 - frac))
+            rh    = int(sh * 0.05 + sh * 0.55 * (1 - frac))
+            alpha = int(frac * 22)
+            r = max(0, min(255, alpha))
+            col = f"#{r//4:02x}{r//3:02x}{r:02x}"
+            c.create_rectangle(cx - rw, cy - rh, cx + rw, cy + rh,
+                               fill=col, outline="")
 
-        # Header / strip dividers
+        # ── Visible grid (slightly brighter than before) ──────────────────────
+        for x in range(0, sw, 60):
+            c.create_line(x, 0, x, sh, fill="#060f1a", width=1)
+        for y in range(0, sh, 60):
+            c.create_line(0, y, sw, y, fill="#060f1a", width=1)
+
+        # ── Header / strip dividers ───────────────────────────────────────────
         c.create_line(0, _HEADER_H, sw, _HEADER_H, fill=_DIM, width=1)
         c.create_line(0, sh - _STRIP_H, sw, sh - _STRIP_H, fill=_DIM, width=1)
 
-        # Subtle glow line under header
-        for xi in range(0, sw, 4):
-            a = 1.0 - abs(xi - sw/2) / (sw * 0.55)
+        # ── Glow line under header ────────────────────────────────────────────
+        for xi in range(0, sw, 3):
+            a = 1.0 - abs(xi - sw / 2) / (sw * 0.50)
             if a > 0:
-                col = _dim_hex(_TEAL, max(0, a * 0.35))
-                c.create_rectangle(xi, _HEADER_H-1, xi+3, _HEADER_H,
+                col = _dim_hex(_TEAL, max(0, a * 0.50))
+                c.create_rectangle(xi, _HEADER_H - 2, xi + 2, _HEADER_H,
+                                   fill=col, outline="")
+        # ── Glow line above strip ─────────────────────────────────────────────
+        sy = sh - _STRIP_H
+        for xi in range(0, sw, 3):
+            a = 1.0 - abs(xi - sw / 2) / (sw * 0.50)
+            if a > 0:
+                col = _dim_hex(_TEAL, max(0, a * 0.30))
+                c.create_rectangle(xi, sy, xi + 2, sy + 2,
                                    fill=col, outline="")
 
         if use_panels:
@@ -301,21 +323,21 @@ class AgentWindow:
             c.create_line(sw - _PANEL_W, _HEADER_H, sw - _PANEL_W,
                           sh - _STRIP_H, fill=_DIM, width=1)
 
-        # Corner brackets — teal with dark backing
-        L = 40
+        # ── Corner brackets — larger and brighter ────────────────────────────
+        L = 52
         for x1, y1, x2, y2, x3, y3 in [
-            (12, 12,    12 + L, 12,    12,    12 + L),
-            (sw-12, 12, sw-12-L, 12,   sw-12, 12 + L),
-            (12, sh-12, 12 + L, sh-12, 12,    sh-12-L),
-            (sw-12, sh-12, sw-12-L, sh-12, sw-12, sh-12-L),
+            (14, 14,    14 + L, 14,    14,    14 + L),
+            (sw-14, 14, sw-14-L, 14,   sw-14, 14 + L),
+            (14, sh-14, 14 + L, sh-14, 14,    sh-14-L),
+            (sw-14, sh-14, sw-14-L, sh-14, sw-14, sh-14-L),
         ]:
-            c.create_line(x1, y1, x2, y2, fill=_DIM,  width=4)
-            c.create_line(x1, y1, x3, y3, fill=_DIM,  width=4)
-            c.create_line(x1, y1, x2, y2, fill=_TEAL, width=1)
-            c.create_line(x1, y1, x3, y3, fill=_TEAL, width=1)
+            c.create_line(x1, y1, x2, y2, fill=_DIM,  width=5)
+            c.create_line(x1, y1, x3, y3, fill=_DIM,  width=5)
+            c.create_line(x1, y1, x2, y2, fill=_TEAL, width=2)
+            c.create_line(x1, y1, x3, y3, fill=_TEAL, width=2)
 
         c.create_text(sw - 12, sh - 8, text="MERAAI  ·  TouchlessX",
-                      fill=_DIM, anchor="se", font=_F_TINY)
+                      fill=_DIM2, anchor="se", font=_F_TINY)
 
     # ─────────────────────────────────────────────────────── orbital icons
     def _build_orbital_icons(self) -> None:

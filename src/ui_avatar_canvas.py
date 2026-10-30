@@ -36,7 +36,10 @@ from .agent_theme import get as _theme
 
 _BG      = (3, 7, 15)
 _BG_HEX  = "#03070f"
-_TICK_MS = 50   # 20 fps
+_TICK_MS = 40   # 25 fps  (smoother than before)
+
+# Particle ring: N dots orbiting the circle
+_N_PARTICLES = 14
 
 
 def _cl(v: float) -> int:
@@ -164,15 +167,15 @@ class AvatarCanvas:
         cx = W / 2 + jx
         cy = H * 0.42 + jy   # slightly above centre (leave room for text below)
 
-        R = int(min(W, H) * 0.21)   # core circle radius
+        R = int(min(W, H) * 0.26)   # core circle radius — larger for impact
 
         # Clear buffer
         self._buf.paste((*_BG, 255), [0, 0, W, H])
         img = self._buf
         d   = ImageDraw.Draw(img)
 
-        # ── Ambient glow (large soft halos) ──────────────────────────────────
-        for frac, a in [(3.8, 4), (2.8, 8), (2.0, 16), (1.5, 28)]:
+        # ── Ambient glow (large soft halos) — more layers, bigger ────────────
+        for frac, a in [(5.0, 3), (4.0, 6), (3.0, 12), (2.2, 22), (1.7, 36)]:
             gr = int(R * frac)
             d.ellipse([cx-gr, cy-gr, cx+gr, cy+gr],
                       fill=(rc, gc, bc, _cl(a * bm)))
@@ -200,21 +203,38 @@ class AvatarCanvas:
         d.ellipse([cx-r2, cy-r2, cx+r2, cy+r2],
                   outline=(rb, gb, bbl, _cl(60 * bm)), width=2)
 
-        # ── Specular dot (top-left) ───────────────────────────────────────────
-        ho = int(R * 0.30); hr = int(R * 0.18)
+        # ── Specular highlight (bright arc at top-left of circle) ────────────
+        sr = int(R * 0.88)
+        d.arc([cx - sr, cy - sr, cx + sr, cy + sr],
+              start=200, end=260, fill=(255, 255, 255, _cl(90 * bm)), width=3)
+        ho = int(R * 0.30); hr = int(R * 0.14)
         d.ellipse([cx-ho-hr, cy-ho-hr, cx-ho+hr, cy-ho+hr],
-                  fill=(255, 255, 255, _cl(50 * bm)))
+                  fill=(255, 255, 255, _cl(70 * bm)))
 
-        # ── Three decorative tick marks on outer rim ──────────────────────────
-        tick_r_in  = int(R * 1.08)
-        tick_r_out = int(R * 1.18)
+        # ── Particle ring — small glowing dots orbiting the circle ───────────
+        part_r = int(R * 1.30)
+        pr_dot = max(3, int(R * 0.045))
+        for k in range(_N_PARTICLES):
+            ang    = math.radians(self._angle * 0.7 + k * (360 / _N_PARTICLES))
+            bob    = math.sin(self._angle * 0.03 + k * 0.45) * int(R * 0.08)
+            pr_off = int(part_r + bob)
+            px     = int(cx + pr_off * math.cos(ang))
+            py     = int(cy + pr_off * math.sin(ang))
+            bright = 0.4 + 0.6 * ((math.cos(ang) + 1) / 2)
+            pa     = _cl(200 * bm * bright)
+            d.ellipse([px - pr_dot, py - pr_dot, px + pr_dot, py + pr_dot],
+                      fill=(rb, gb, bbl, pa))
+
+        # ── Three larger tick marks on outer rim ──────────────────────────────
+        tick_r_in  = int(R * 1.50)
+        tick_r_out = int(R * 1.64)
         for deg_off in [0, 120, 240]:
             ang = math.radians(self._angle + deg_off)
             x1  = int(cx + tick_r_in  * math.cos(ang))
             y1  = int(cy + tick_r_in  * math.sin(ang))
             x2  = int(cx + tick_r_out * math.cos(ang))
             y2  = int(cy + tick_r_out * math.sin(ang))
-            d.line([x1, y1, x2, y2], fill=(rb, gb, bbl, _cl(180 * bm)), width=2)
+            d.line([x1, y1, x2, y2], fill=(rb, gb, bbl, _cl(160 * bm)), width=2)
 
         # ── Push frame ────────────────────────────────────────────────────────
         self._photo = ImageTk.PhotoImage(img.convert("RGB"))
@@ -238,21 +258,24 @@ class AvatarCanvas:
             d.ellipse([cx-ro, cy-ro, cx+ro, cy+ro],
                       outline=(rc, gc, bc, _cl(55 * bm)), width=2)
 
-        # ── LISTENING — 3 expanding pulse rings ──────────────────────────────
+        # ── LISTENING — 5 expanding pulse rings (iOS Siri style) ─────────────
         elif s == "listening":
-            for k, (frac, opa) in enumerate([(1.35, 90), (1.65, 55), (2.00, 28)]):
-                phase = (self._t * 0.022 + k * 0.55) % 1.0
-                pr    = int(R * (frac + 0.30 * phase))
+            for k, (frac, opa, wid) in enumerate([
+                (1.25, 180, 3), (1.55, 120, 2),
+                (1.90, 80,  2), (2.30, 48,  1), (2.80, 24, 1)
+            ]):
+                phase = (self._t * 0.020 + k * 0.44) % 1.0
+                pr    = int(R * (frac + 0.35 * phase))
                 pa    = _cl(opa * (1 - phase) * bm)
                 d.ellipse([cx-pr, cy-pr, cx+pr, cy+pr],
-                          outline=(rc, gc, bc, pa), width=2)
+                          outline=(rc, gc, bc, pa), width=wid)
 
         # ── SPEAKING  — audio bars radiating from outer ring ─────────────────
         elif s in ("speaking", "phone"):
-            N          = 48
-            bar_r_base = int(R * 1.08)
-            bar_max    = int(R * 0.75)
-            bar_w      = max(2, int(R * 0.028))
+            N          = 56                    # more bars → denser look
+            bar_r_base = int(R * 1.05)
+            bar_max    = int(R * 0.95)         # taller bars
+            bar_w      = max(2, int(R * 0.025))
             for i in range(N):
                 ang  = math.tau * i / N
                 amp  = _bar_amp(i, N, self._wave_t, 1.0)
@@ -263,14 +286,14 @@ class AvatarCanvas:
                 y0   = int(cy + r0 * math.sin(ang))
                 x1   = int(cx + r1 * math.cos(ang))
                 y1   = int(cy + r1 * math.sin(ang))
-                # colour: bright core, dim tips
-                alpha = _cl((80 + 170 * amp) * bm)
+                alpha = _cl((100 + 155 * amp) * bm)
                 d.line([x0, y0, x1, y1],
                        fill=(rb, gb, bbl, alpha), width=bar_w)
-            # outer glow ring
-            ro = int(R * 1.08)
-            d.ellipse([cx-ro, cy-ro, cx+ro, cy+ro],
-                      outline=(rb, gb, bbl, _cl(100 * bm)), width=3)
+            # two glow rings for depth
+            for rscale, rw, ra in [(1.05, 5, 60), (1.05, 2, 140)]:
+                ro = int(R * rscale)
+                d.ellipse([cx-ro, cy-ro, cx+ro, cy+ro],
+                          outline=(rb, gb, bbl, _cl(ra * bm)), width=rw)
 
         # ── THINKING / RESEARCH — counter-rotating arcs ───────────────────────
         elif s in ("thinking", "research", "coding"):
