@@ -41,11 +41,16 @@ _PREF_FILE = Path(__file__).parent.parent / "data" / "lang_pref.json"
 
 
 def load_preference() -> LangCode:
-    """Return saved language preference, defaulting to 'auto'."""
+    """Return saved language preference.
+
+    Default is "hinglish" — understands both Hindi and English commands
+    and replies naturally in whichever mix the user speaks.
+    Change from the language selector in the AI overlay header.
+    """
     try:
-        return json.loads(_PREF_FILE.read_text()).get("lang", "auto")  # type: ignore[return-value]
+        return json.loads(_PREF_FILE.read_text()).get("lang", "hinglish")  # type: ignore[return-value]
     except Exception:
-        return "auto"
+        return "hinglish"
 
 
 def save_preference(lang: LangCode) -> None:

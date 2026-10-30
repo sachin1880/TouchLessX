@@ -70,14 +70,16 @@ Step 3: {"thought": "Task complete", "action": "done", "args": {"result": "YouTu
 
 # ── needs_planning heuristic ──────────────────────────────────────────────────
 # These patterns suggest a task that requires multiple steps.
+# Covers English, Hindi (Devanagari) and Hinglish (Roman-script Hindi).
 
 _MULTI_PATTERNS = re.compile(
     r"""
     \b(
-        send\s+\w+\s+a\s+(whatsapp|message|text)|  # "send John a WhatsApp"
-        message\s+\w+\s+(saying|that|ko)|           # "message John saying"
-        whatsapp\s+\w|                              # "WhatsApp Mom"
-        open\s+\w.*\band\b.*\b(search|find|type|write|compose|send|click)\b|
+        # ── English multi-step patterns ──────────────────────────────────────
+        send\s+\w+\s+a\s+(whatsapp|message|text)|   # "send John a WhatsApp"
+        message\s+\w+\s+(saying|that|ko)|            # "message John saying"
+        whatsapp\s+\w|                               # "WhatsApp Mom"
+        open\s+\w.*\band\b.*\b(search|find|type|write|compose|send|click|play|watch|buy|order)\b|
         go\s+to\s+\w.*\band\b|
         search.*\band\s+(buy|order|open|play|read)\b|
         (create|make|write)\s+a?\s*(new\s+)?(file|document|note)\b|
@@ -88,8 +90,32 @@ _MULTI_PATTERNS = re.compile(
         set\s+(an?\s+)?alarm\b|
         download\s+\w|
         translate\s+.+\bto\b|
-        karo\s+\w|                                  # Hindi: "karo"
-        bhejo|likho|kholo|dhoondho                  # Hindi: send/write/open/search
+
+        # ── Hinglish (Roman-script Hindi) multi-step ──────────────────────────
+        # Send / message
+        bhejo|message\s+karo|msg\s+karo|
+        whatsapp\s+(karo|pe|par|mein)|
+        # Open + action
+        kholo\s+aur|khol\s+ke|
+        # Write / type
+        likho|type\s+karo|likh\s+do|
+        # Search / find
+        dhoondho|search\s+karo|dhundh\s+do|
+        # Play
+        chalao|play\s+karo|suno\s+\w|
+        # Book / order
+        book\s+karo|order\s+karo|
+        # Download
+        download\s+karo|
+        # Translate
+        translate\s+karo|anuvad\s+karo|
+        # Reminder / alarm
+        yaad\s+dilao|alarm\s+lagao|reminder\s+set\s+karo|
+        # General "do X" in Hinglish
+        \w+\s+karo\s+aur|\w+\s+kar\s+aur|
+
+        # ── Devanagari (pure Hindi) multi-step ────────────────────────────────
+        [ऀ-ॿ]+.*[ऀ-ॿ]+   # two or more Hindi words = full Hindi task
     )
     """,
     re.IGNORECASE | re.VERBOSE,
@@ -160,6 +186,9 @@ class TaskAgent:
         steps: list[Step] = []
         parse_fails = 0
 
+        # Detect language once and build the system prompt for this task.
+        system = _build_system(task)
+
         for i in range(max_steps):
             if self._stop_flag.is_set():
                 self._dispatch_done("Task cancelled.")
@@ -170,7 +199,7 @@ class TaskAgent:
 
             # Ask the LLM for the next action
             try:
-                raw  = self._ai.generate(prompt, _SYSTEM,
+                raw  = self._ai.generate(prompt, system,
                                          as_json=True, max_tokens=180)
                 plan = _parse(raw)
                 parse_fails = 0
@@ -232,6 +261,33 @@ class TaskAgent:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _build_system(task: str) -> str:
+    """Return the system prompt for *task*, with a language instruction prepended.
+
+    Detects Hindi / Hinglish in the task text and tells the AI to:
+      • speak and reply in the same language
+      • URL-encode Hindi text correctly in WhatsApp / Gmail links
+    """
+    try:
+        from .agent_lang import detect_language, get_language_instruction
+        lang = detect_language(task)
+        lang_instr = get_language_instruction(lang)
+    except Exception:
+        lang_instr = ""
+
+    if not lang_instr:
+        return _SYSTEM
+
+    hindi_url_hint = (
+        "\nIMPORTANT for Hindi tasks:\n"
+        "- When the message contains Hindi/Devanagari text, URL-encode it with %XX percent encoding.\n"
+        "- For WhatsApp: https://web.whatsapp.com/send?text=<percent-encoded-hindi-text>\n"
+        "- Your speak/done messages should also be in Hindi so the user hears them in Hindi.\n"
+    ) if lang in ("hindi", "hinglish") else ""
+
+    return lang_instr + "\n\n" + _SYSTEM + hindi_url_hint
+
 
 def _build_prompt(task: str, steps: list[Step]) -> str:
     history = ""
