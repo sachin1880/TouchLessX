@@ -39,7 +39,8 @@ from .smart_home import SmartHomeClient
 from .system import RELEASES_PAGE, LoginItem, MenuBarIcon, check_for_update, launch_command, is_packaged
 from .training import GestureDataset, ModelManager, TrainingError, train
 from .assistant import (
-    FREE_REQUEST_WORDS, SITES, AIError, LocalAI, Task, gmail_compose_url, interpret, mailto_url,
+    FREE_REQUEST_WORDS, SITES, AIError, LocalAI, Task, AgentTask,
+    gmail_compose_url, interpret, mailto_url,
 )
 from .voice import Transcriber, VoiceListener, command_vocabulary, installed_apps, parse_command
 from .ui_pages import PAGES, action_label
@@ -712,6 +713,9 @@ class App(ctk.CTk):
                 aw.set_thinking(text, mode=self._agent_mode)
             if request is None:
                 self.voice_result = f"I didn't understand: \"{text}\""
+            elif isinstance(request, AgentTask):
+                self._run_agent_task(request)
+                self.voice_result = ""   # result arrives asynchronously
             elif isinstance(request, Task):
                 self.voice_result = self._run_task(request)
             else:
@@ -820,6 +824,50 @@ class App(ctk.CTk):
 
         self._agent_window = AgentWindow(self, on_close=None)
         self._agent_window.set_listening()
+
+    def _run_agent_task(self, agent_task: AgentTask) -> None:
+        """Launch the multi-step TaskAgent for *agent_task* and wire it to the UI."""
+        aw = self._agent_window
+        step_labels = {
+            "open_url":  "Opening…",
+            "type_text": "Typing…",
+            "press_key": "Pressing key…",
+            "wait":      "Waiting…",
+            "scroll":    "Scrolling…",
+            "speak":     "Speaking…",
+        }
+
+        def _on_step(idx: int, action: str, thought: str, progress: float) -> None:
+            if aw and not aw._closed:
+                label = step_labels.get(action, action)
+                aw.set_executing(task=f"Step {idx+1}: {label}  —  {thought[:60]}", progress=progress)
+
+        def _on_speak(text: str) -> None:
+            if aw and not aw._closed:
+                aw.show_response(text, mode=self._agent_mode)
+            # Also update heard label immediately
+            if aw and not aw._closed:
+                try:
+                    aw._ic(aw._heard_item, text=text, fill="#ffc844")
+                except Exception:
+                    pass
+
+        def _on_done(result: str) -> None:
+            self.voice_result = result
+            if aw and not aw._closed:
+                aw.show_response(result, mode=self._agent_mode)
+            self._sync_voice_ui()
+
+        if aw and not aw._closed:
+            aw.set_executing(task=f"Working on: {agent_task.text[:60]}…", progress=0.0)
+
+        self.local_ai.run_agent_task(
+            task_text=agent_task.text,
+            on_step=_on_step,
+            on_speak=_on_speak,
+            on_done=_on_done,
+            window=self,
+        )
 
     def _finish_task(self, task: Task, result) -> None:
         if self.voice is not None and self.voice_status[0] == "thinking":

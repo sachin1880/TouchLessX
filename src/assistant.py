@@ -1,14 +1,17 @@
 """The assistant: turns a freely spoken request into a task and carries it out.
 
-Two layers. `interpret` recognises the common requests by their shape - open a web
-site, search YouTube or the web, type some text, write a mail - without any AI, so
-they are instant and predictable. Writing and open questions go to a language model
-running on this computer through Ollama (`LocalAI`); nothing is sent to the internet.
+Two layers:
+  1. interpret()   — instant pattern matching for common requests (no AI needed).
+  2. LocalAI       — Ollama llama3.2:3b for writing, answering and multi-step tasks.
 
-Whatever is asked, the assistant can only do things from a fixed list: open an https
-address it built itself, put text on the clipboard and paste it, open a mail draft,
-show or speak an answer, or run one of the app's existing actions. The language model
-only ever produces *text*; it is never given a way to run commands.
+Multi-step agent (TaskAgent in agent_task_planner.py)
+─────────────────────────────────────────────────────
+When needs_planning() returns True the request is routed to TaskAgent, which runs
+a plan→execute→verify loop: the LLM produces one JSON action at a time, the tool
+layer (agent_computer.py) executes it, and the result is fed back until done.
+
+Supported agent actions: open_url, type_text, press_key, wait, scroll, speak, done.
+The LLM only ever produces text and JSON; it cannot run shell commands.
 """
 from __future__ import annotations
 
@@ -24,6 +27,25 @@ from dataclasses import dataclass
 from urllib.parse import quote, quote_plus
 
 from .voice import VoiceCommand, match_app, parse_command
+
+
+# ── multi-step agent routing ──────────────────────────────────────────────────
+
+def needs_planning(text: str) -> bool:
+    """Return True when *text* sounds like a multi-step task the agent should handle."""
+    from .agent_task_planner import needs_planning as _np
+    return _np(text)
+
+
+@dataclass(frozen=True)
+class AgentTask:
+    """Marker returned by interpret() when the request needs the multi-step agent."""
+    text: str    # original spoken text
+    label: str   # short description for the UI
+
+    @property
+    def needs_ai(self) -> bool:
+        return True
 
 
 def _lang_instruction(text: str) -> str:
@@ -249,6 +271,12 @@ def interpret(spoken: str, app_names=()) -> Task | VoiceCommand | None:
         return Task("write_text", f"Write: {text[:48]}", text=spoken.strip())
     if _QUESTION.match(text):
         return Task("answer", f"Answer: {text[:48]}", text=spoken.strip())
+
+    # Route multi-step tasks to the agentic planner.
+    if needs_planning(spoken):
+        return AgentTask(text=spoken.strip(),
+                         label=f"Agent: {spoken.strip()[:60]}")
+
     return basic
 
 
@@ -360,3 +388,32 @@ class LocalAI:
         if lang_instr:
             system = lang_instr + " " + system
         return self.generate(question, system, max_tokens=200)[:1200]
+
+    def run_agent_task(
+        self,
+        task_text: str,
+        on_step=None,
+        on_speak=None,
+        on_done=None,
+        window=None,
+    ):
+        """Launch the multi-step TaskAgent for *task_text* in a background thread.
+
+        Parameters
+        ──────────
+        on_step(step_idx, action, thought, progress)  – UI progress callback
+        on_speak(text)                                 – speak aloud callback
+        on_done(result)                                – final result callback
+        window                                         – tk widget for after() dispatch
+
+        Returns the agent's Thread so the caller can join or cancel it.
+        """
+        from .agent_task_planner import TaskAgent
+        agent = TaskAgent(
+            ai=self,
+            on_step=on_step,
+            on_speak=on_speak,
+            on_done=on_done,
+            window=window,
+        )
+        return agent.run_async(task_text)
