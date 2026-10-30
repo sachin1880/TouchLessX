@@ -45,22 +45,27 @@ def lookup(name: str) -> dict | None:
     contacts = _load()
     key = name.lower().strip()
 
-    # Alias table — extend as needed
-    _ALIASES: dict[str, list[str]] = {
-        "mom":    ["mummy", "maa", "mother", "mama", "ammi"],
-        "dad":    ["papa", "father", "baba", "pitaji", "abba"],
-        "brother":["bhai", "bro"],
-        "sister": ["didi", "sis", "behan"],
-        "wife":   ["patni", "biwi"],
-        "husband":["pati"],
-    }
-    # Reverse-map: "mummy" → "mom"
-    _REV: dict[str, str] = {alias: k for k, v in _ALIASES.items() for alias in v}
-    key = _REV.get(key, key)   # normalise alias to canonical
-
-    # Exact match
+    # Try exact match first (before any alias remapping)
     if key in contacts:
         return contacts[key]
+
+    # Alias table — maps spoken variations to a canonical lookup key
+    # Only used when the original key is NOT in contacts
+    _ALIASES: dict[str, list[str]] = {
+        "mom":     ["mummy", "mother", "ammi", "amma"],
+        "maa":     ["mummy", "mother", "ammi", "amma", "mom"],
+        "dad":     ["papa", "father", "baba", "pitaji", "abba", "pita"],
+        "papa":    ["dad", "father", "baba", "pitaji", "abba"],
+        "brother": ["bhai", "bro"],
+        "sister":  ["didi", "sis", "behan"],
+        "wife":    ["patni", "biwi"],
+        "husband": ["pati"],
+    }
+    _REV: dict[str, str] = {alias: k for k, v in _ALIASES.items() for alias in v}
+    normalized = _REV.get(key, key)
+
+    if normalized != key and normalized in contacts:
+        return contacts[normalized]
 
     # Partial / fuzzy: any stored key that contains the query or vice versa
     for stored_key, val in contacts.items():

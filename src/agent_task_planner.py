@@ -99,6 +99,11 @@ Task: "Open VS Code and my project"
 {"thought": "Open VS Code with project folder", "action": "shell", "args": {"command": "open -a 'Visual Studio Code' ~/Documents"}, "done": false}
 {"thought": "Done", "action": "done", "args": {"result": "VS Code opened."}, "done": true}
 
+Task: "Add papa number 9876543210"
+{"thought": "Tell user", "action": "speak", "args": {"text": "Papa ka number save kar raha hoon"}, "done": false}
+{"thought": "Save contact", "action": "add_contact", "args": {"name": "papa", "phone": "+919876543210", "email": ""}, "done": false}
+{"thought": "Done", "action": "done", "args": {"result": "Papa ka number +919876543210 save ho gaya!"}, "done": true}
+
 Task: "Send email to Rahul about meeting tomorrow"
 {"thought": "Tell user", "action": "speak", "args": {"text": "Rahul ko email bhej raha hoon"}, "done": false}
 {"thought": "Look up Rahul's email", "action": "lookup_contact", "args": {"name": "rahul"}, "done": false}
@@ -117,6 +122,10 @@ _MULTI_PATTERNS = re.compile(
         send\s+\w+\s+a\s+(whatsapp|message|text)|   # "send John a WhatsApp"
         message\s+\w+\s+(saying|that|ko)|            # "message John saying"
         whatsapp\s+\w|                               # "WhatsApp Mom"
+        add\s+\w+\s+(number|contact|phone)|          # "add mom number 98765"
+        save\s+\w+\s+(number|contact|phone)|         # "save dad number"
+        \w+\s+ka\s+number\s+save|                    # "maa ka number save"
+        contact\s+(add|save|store)\s+karo|
         open\s+\w.*\band\b.*\b(search|find|type|write|compose|send|click|play|watch|buy|order)\b|
         go\s+to\s+\w.*\band\b|
         search.*\band\s+(buy|order|open|play|read)\b|
